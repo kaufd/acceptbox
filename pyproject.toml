@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acceptbox"
+version = "0.1.0a1"
+description = "Подготовка входов для независимой приёмки коммитов с WitnessBox"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.scripts]
+acceptbox = "acceptbox.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acceptbox"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src/acceptbox", "/README.md", "/pyproject.toml"]

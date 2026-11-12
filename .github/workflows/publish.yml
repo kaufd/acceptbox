@@ -1,0 +1,41 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия GitHub Release без префикса v"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download and verify release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9][a-zA-Z0-9.]*$ ]]; then
+            echo "Invalid release version" >&2
+            exit 1
+          fi
+          wheel="acceptbox-$VERSION-py3-none-any.whl"
+          sdist="acceptbox-$VERSION.tar.gz"
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern "$wheel" --pattern "$sdist" --pattern SHA256SUMS
+          cd dist
+          sha256sum "$wheel" "$sdist" | diff -u SHA256SUMS -
+          rm SHA256SUMS
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
