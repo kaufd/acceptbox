@@ -4,15 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "acceptbox"
-version = "0.1.0a1"
-description = "Подготовка входов для независимой приёмки коммитов с WitnessBox"
+version = "0.1.0"
+description = "Независимая приёмка коммитов base → repro → head в режимах command и WitnessBox"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Testing",
 ]
 
@@ -23,4 +28,4 @@ acceptbox = "acceptbox.cli:main"
 packages = ["src/acceptbox"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/acceptbox", "/README.md", "/pyproject.toml"]
+include = ["/src/acceptbox", "/README.md", "/LICENSE", "/pyproject.toml"]
