@@ -1,0 +1,52 @@
+name: WitnessBox Compatibility
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat-latest-witnessbox:
+    name: Latest WitnessBox from PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install acceptbox and latest witnessbox from PyPI
+        run: |
+          python3 -m pip install --no-deps .
+          python3 -m pip install --upgrade "witnessbox>=0.10.0"
+
+      - name: Verify compatibility via --installation
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys
+          res = subprocess.run(["acceptbox", "--installation"], capture_output=True, text=True)
+          print(res.stdout)
+          if res.returncode != 0:
+              sys.exit(f"expected exit 0, got {res.returncode}: {res.stderr}")
+          data = json.loads(res.stdout)
+          assert data["witnessbox"]["status"] == "compatible", data
+          PY
+
+      - name: Run WitnessBox contract and e2e tests
+        run: |
+          python3 - <<'PY'
+          import sys, unittest
+          loader = unittest.TestLoader()
+          suite = unittest.TestSuite([
+              loader.discover("tests", pattern="test_negative_witnessbox.py"),
+              loader.discover("tests", pattern="test_e2e_witnessbox.py"),
+          ])
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          assert result.testsRun > 0, "no witnessbox tests discovered"
+          assert not result.skipped, f"unexpected skipped tests: {result.skipped}"
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY

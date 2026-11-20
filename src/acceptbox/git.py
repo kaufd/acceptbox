@@ -1,0 +1,227 @@
+"""Изоляция Git: временный клон, fetch по полному SHA, detached-worktree, ancestry, diff.
+
+Правила изоляции (L17): каждый вызов git получает ``--no-replace-objects``;
+клонирование, fetch и создание worktree дополнительно получают
+``-c core.hooksPath=/dev/null``; каждый diff получает
+``-c diff.renames=false --no-renames -z``; из окружения везде удаляются
+переменные из ``git rev-parse --local-env-vars``.
+"""
+
+from __future__ import annotations
+
+import functools
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+GIT_TIMEOUT_SEC = 600.0
+
+# Резерв на случай, когда `git rev-parse --local-env-vars` недоступен (git не
+# установлен): список стабилен для всех актуальных версий git.
+_FALLBACK_LOCAL_ENV_VARS = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
+    "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+)
+
+
+class GitError(Exception):
+    """Сбой git-инфраструктуры: git недоступен, репозиторий недостижим, таймаут."""
+
+
+@functools.lru_cache(maxsize=1)
+def local_env_var_names() -> tuple[str, ...]:
+    """Имена переменных git-изоляции; работает и вне git-репозитория."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return _FALLBACK_LOCAL_ENV_VARS
+    if result.returncode == 0:
+        names = tuple(result.stdout.decode("ascii", "replace").split())
+        if names:
+            return names
+    return _FALLBACK_LOCAL_ENV_VARS
+
+
+def strip_local_env_vars(env: dict[str, str]) -> dict[str, str]:
+    """Копия окружения без переменных git-изоляции (защита от GIT_DIR и т.п.)."""
+    clean = dict(env)
+    for name in local_env_var_names():
+        clean.pop(name, None)
+    return clean
+
+
+def base_env() -> dict[str, str]:
+    """Окружение git-операций acceptbox: os.environ без local-env-vars."""
+    env = strip_local_env_vars(dict(os.environ))
+    # Репозиторий может требовать авторизацию: без подсказок git падает, а не висит.
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    return env
+
+
+def run_git(repo: Path | None, env: dict[str, str], *args: str,
+            timeout: float = GIT_TIMEOUT_SEC) -> bytes:
+    """Вызов git с ``--no-replace-objects``; любая ошибка или таймаут — GitError."""
+    argv = ["git", "--no-replace-objects"]
+    if repo is not None:
+        argv += ["-C", str(repo)]
+    argv += list(args)
+    try:
+        result = subprocess.run(argv, env=env, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise GitError(f"git {args[0]}: превышен таймаут {timeout:g} с") from error
+    except OSError as error:
+        raise GitError(f"не удалось запустить git: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        message = f"git {' '.join(args[:2])}: код {result.returncode}"
+        raise GitError(f"{message}: {detail[-1]}" if detail else message)
+    return result.stdout
+
+
+def probe_git() -> dict:
+    """Диагностика git для ``acceptbox --installation``."""
+    executable = shutil.which("git")
+    if executable is None:
+        return {"path": None, "version": None, "status": "missing"}
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return {"path": executable, "version": None, "status": "error"}
+    if result.returncode != 0:
+        return {"path": executable, "version": None, "status": "error"}
+    match = re.search(r"git version\s+(\S+)", result.stdout.decode("utf-8", "replace"))
+    if match is None:
+        return {"path": executable, "version": None, "status": "error"}
+    return {"path": executable, "version": match.group(1), "status": "ok"}
+
+
+def clone_no_checkout(source: str, destination: Path, env: dict[str, str]) -> None:
+    """Временный клон без checkout; локальные пути клонируются с ``--no-local``.
+
+    ``--no-local`` исключает hardlink'и на объекты репозитория пользователя и
+    гарантирует полноту передачи через transport (все объявленные ссылки).
+    """
+    args = ["-c", "core.hooksPath=/dev/null", "clone", "--quiet", "--no-checkout"]
+    if os.path.exists(source):
+        args.append("--no-local")
+    args += ["--", source, str(destination)]
+    run_git(None, env, *args)
+
+
+def commit_present(repo: Path, env: dict[str, str], sha: str) -> bool:
+    """True, только если sha разрешается в коммит; любое несоответствие — False."""
+    try:
+        kind = run_git(repo, env, "cat-file", "-t", f"{sha}^{{commit}}")
+    except GitError:
+        return False
+    return kind.strip() == b"commit"
+
+
+def _fetch(repo: Path, env: dict[str, str], source: str, *refspecs: str) -> None:
+    run_git(repo, env, "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", source, *refspecs)
+
+
+def fetch_all_refs(repo: Path, env: dict[str, str], source: str) -> None:
+    """Вытянуть все ссылки источника в отдельное пространство имён.
+
+    Гарантирует доступность коммитов с не-дефолтных веток и PR-ссылок как в
+    локальных репозиториях (без ``uploadpack.allowAnySHA1InWant``), так и на серверах.
+    """
+    _fetch(repo, env, source, "+refs/*:refs/acceptbox-fetch/*")
+
+
+def ensure_commit(repo: Path, env: dict[str, str], source: str, sha: str) -> bool:
+    """Гарантировать наличие коммита в клоне: cat-file → fetch по SHA → fetch всех ссылок.
+
+    True — коммит доступен; False — источник достижим, но коммита нет;
+    GitError — недостижимый источник или сбой сети (gate-error).
+    """
+    if commit_present(repo, env, sha):
+        return True
+    try:
+        _fetch(repo, env, source, sha)
+    except GitError:
+        fetch_all_refs(repo, env, source)
+    return commit_present(repo, env, sha)
+
+
+def resolve_ref(repo: Path, env: dict[str, str], *candidates: str) -> str | None:
+    """Полный SHA коммита первого подходящего кандидата, иначе None."""
+    for candidate in candidates:
+        try:
+            output = run_git(repo, env, "rev-parse", "--verify", f"{candidate}^{{commit}}")
+        except GitError:
+            continue
+        return output.strip().decode("ascii")
+    return None
+
+
+def fetch_ref(repo: Path, env: dict[str, str], source: str, ref: str) -> str | None:
+    """Вытянуть ссылку EBT и вернуть SHA коммита, на который она указывает.
+
+    Сначала явный fetch ссылки, при неудаче — все ссылки источника.
+    None — ссылка не найдена (источник достижим); GitError — сбой источника/сети.
+    """
+    if ref.startswith("refs/"):
+        candidates = (ref,)
+    else:
+        candidates = (f"refs/heads/{ref}", f"refs/tags/{ref}")
+    try:
+        _fetch(repo, env, source, f"+{ref}:refs/acceptbox-ebt/ref")
+    except GitError:
+        fetch_all_refs(repo, env, source)
+        mapped = tuple(f"refs/acceptbox-fetch/{name[len('refs/'):]}".replace("//", "/")
+                       for name in candidates)
+        return resolve_ref(repo, env, *mapped)
+    return resolve_ref(repo, env, "refs/acceptbox-ebt/ref")
+
+
+def add_worktree(repo: Path, env: dict[str, str], sha: str, path: Path) -> None:
+    """Detached-worktree для прогона: checkout пользователя не переключается, хуки отключены."""
+    run_git(repo, env, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--quiet",
+            "--detach", str(path), sha)
+
+
+def rev_parse_tree(repo: Path, env: dict[str, str], sha: str) -> str:
+    """SHA дерева коммита (L13): связывает проверенное дерево с доставленным коммитом."""
+    return run_git(repo, env, "rev-parse", "--verify", f"{sha}^{{tree}}").strip().decode("ascii")
+
+
+def is_ancestor(repo: Path, env: dict[str, str], ancestor: str, descendant: str) -> bool:
+    """``git merge-base --is-ancestor``: True/False; любой иной исход — GitError."""
+    argv = ["git", "--no-replace-objects", "-C", str(repo),
+            "merge-base", "--is-ancestor", ancestor, descendant]
+    try:
+        result = subprocess.run(argv, env=env, capture_output=True,
+                                timeout=GIT_TIMEOUT_SEC, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise GitError("git merge-base: превышен таймаут") from error
+    except OSError as error:
+        raise GitError(f"не удалось запустить git: {error}") from error
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+    message = f"git merge-base --is-ancestor: код {result.returncode}"
+    raise GitError(f"{message}: {detail[-1]}" if detail else message)
+
+
+def changed_paths(repo: Path, env: dict[str, str], older: str, newer: str,
+                  pathspecs: list[str] | None = None) -> list[str]:
+    """Пути, изменённые между деревьями двух коммитов; ``--no-renames``:
+    переименование распадается в удаление старого пути и добавление нового.
+    """
+    args = ["-c", "diff.renames=false", "diff", "--name-only", "--no-renames", "-z", older, newer]
+    if pathspecs:
+        args += ["--", *pathspecs]
+    output = run_git(repo, env, *args)
+    return [path for path in output.decode("utf-8", "replace").split("\0") if path]

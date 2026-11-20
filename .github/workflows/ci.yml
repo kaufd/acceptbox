@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-without-witnessbox:
+    name: Tests without witnessbox
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install acceptbox
+        run: python3 -m pip install --no-deps .
+
+      - name: Verify --installation without witnessbox
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys
+          res = subprocess.run(["acceptbox", "--installation"], capture_output=True, text=True)
+          print(res.stdout)
+          if res.returncode != 0:
+              sys.exit(f"expected exit 0, got {res.returncode}: {res.stderr}")
+          data = json.loads(res.stdout)
+          assert data["format"] == 1
+          assert data["git"]["status"] == "ok"
+          assert data["witnessbox"]["status"] == "missing"
+          assert data["witnessbox"]["supported"] == ">=0.10.0"
+          PY
+
+      - name: Run unit, negative, and command e2e tests
+        run: |
+          python3 - <<'PY'
+          import sys, unittest
+          loader = unittest.TestLoader()
+          full = loader.discover("tests", pattern="test_*.py")
+          filtered = unittest.TestSuite()
+          def add_filtered(suite):
+              for item in suite:
+                  if isinstance(item, unittest.TestSuite):
+                      add_filtered(item)
+                  elif not item.id().startswith("test_e2e_witnessbox."):
+                      filtered.addTest(item)
+          add_filtered(full)
+          result = unittest.TextTestRunner(verbosity=2).run(filtered)
+          assert not result.skipped, f"unexpected skipped tests: {result.skipped}"
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY
+
+  test-with-witnessbox:
+    name: Tests with witnessbox 0.10.0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install acceptbox and witnessbox 0.10.0
+        run: |
+          python3 -m pip install --no-deps .
+          python3 -m pip install witnessbox==0.10.0
+
+      - name: Verify --installation with witnessbox 0.10.0
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys
+          res = subprocess.run(["acceptbox", "--installation"], capture_output=True, text=True)
+          print(res.stdout)
+          if res.returncode != 0:
+              sys.exit(f"expected exit 0, got {res.returncode}: {res.stderr}")
+          data = json.loads(res.stdout)
+          assert data["format"] == 1
+          assert data["git"]["status"] == "ok"
+          assert data["witnessbox"]["status"] == "compatible"
+          assert data["witnessbox"]["version"] == "0.10.0"
+          PY
+
+      - name: Run full test suite (zero skips)
+        run: |
+          python3 - <<'PY'
+          import sys, unittest
+          suite = unittest.TestLoader().discover("tests", pattern="test_*.py")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          assert not result.skipped, f"unexpected skipped tests: {result.skipped}"
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY
