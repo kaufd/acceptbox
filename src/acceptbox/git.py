@@ -164,6 +164,28 @@ def resolve_ref(repo: Path, env: dict[str, str], *candidates: str) -> str | None
     return None
 
 
+def resolve_repo_head(source: str, env: dict[str, str]) -> str:
+    """Разрешить HEAD репозитория ``source`` в полный SHA коммита (L22).
+
+    Для локального каталога использует ``rev-parse --verify HEAD^{commit}``,
+    для URL — ``ls-remote -- <source> HEAD``. Любой сбой — GitError.
+    """
+    local_path = Path(source).expanduser()
+    if local_path.is_dir():
+        output = run_git(local_path, env, "rev-parse", "--verify", "HEAD^{commit}")
+        sha = output.strip().decode("ascii", "replace")
+        if not sha:
+            raise GitError(f"не удалось разрешить HEAD в {source}")
+        return sha
+    output = run_git(None, env, "-c", "core.hooksPath=/dev/null",
+                     "ls-remote", "--", source, "HEAD")
+    for line in output.decode("ascii", "replace").splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and parts[1] == "HEAD" and parts[0]:
+            return parts[0]
+    raise GitError(f"ссылка HEAD не найдена в репозитории {source}")
+
+
 def fetch_ref(repo: Path, env: dict[str, str], source: str, ref: str) -> str | None:
     """Вытянуть ссылку EBT и вернуть SHA коммита, на который она указывает.
 

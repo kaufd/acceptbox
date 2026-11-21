@@ -34,8 +34,10 @@ def validate_sha256(value: str, flag: str) -> str:
     return value.lower()
 
 
-def validate_timeout(value: str, flag: str = "--timeout") -> float:
+def validate_timeout(value: str | int | float, flag: str = "--timeout") -> float:
     """Положительное конечное число секунд."""
+    if isinstance(value, bool):
+        raise InputError(f"{flag} должен быть положительным числом секунд")
     try:
         timeout = float(value)
     except (TypeError, ValueError):

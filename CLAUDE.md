@@ -5,7 +5,7 @@
 - `src/acceptbox/` — единственный runtime-пакет; консольная команда — `acceptbox`.
 - Runtime `acceptbox` использует **только стандартную библиотеку Python (`>=3.11`)** и не имеет сторонних runtime-зависимостей (L14). `hatchling` используется исключительно как сборочная зависимость в `pyproject.toml`.
 - Импорт любых внутренних модулей `witnessbox` строго запрещён. Взаимодействие с `witnessbox` допускается только через внешний CLI (`witnessbox --installation`, `witnessbox gate ...`) с fail-closed проверкой схемы JSON.
-- Прогонщики `command.py` и `witnessbox.py` оформлены плоскими модулями без подпакета `adapters/` и реализуют единый контракт `run_commit(...) -> RunOutcome`.
+- Прогонщики `command.py` и `witnessbox.py` оформлены плоскими модулями без подпакета `adapters/` и реализуют единый контракт `run_commit(...) -> RunOutcome`. Проектный конфиг `.acceptbox.toml` разбирается плоским модулем `config.py` через `tomllib` из стандартной библиотеки.
 
 ## Спецификация и решения
 
@@ -19,4 +19,4 @@
   ```sh
   python3 -m unittest discover -s tests
   ```
-- Все проверки Git, окружения и JSON-контрактов должны оставаться fail-closed: очистка `git rev-parse --local-env-vars`, `--no-replace-objects`, `-c core.hooksPath=/dev/null`, `-c diff.renames=false --no-renames -z`, атомарный захват `--out` (`O_EXCL`) и атомарная запись `accept.json` / `calibrate.json`.
+- Все проверки Git, окружения, конфига `.acceptbox.toml` и JSON-контрактов должны оставаться fail-closed: очистка `git rev-parse --local-env-vars`, `--no-replace-objects`, `-c core.hooksPath=/dev/null`, `-c diff.renames=false --no-renames -z`, чтение `.acceptbox.toml` строго из объектов Git коммита `base` с автозащитой в `base..repro` и `base..head`, атомарный захват `--out` (`O_EXCL`) и атомарная запись `accept.json` / `calibrate.json`.

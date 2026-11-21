@@ -39,10 +39,12 @@ class OutDirLock:
     def __init__(self, out_path: Path):
         self.out_path = Path(out_path)
         self.lock_path = self.out_path / LOCK_NAME
+        self.created_dir = False
 
     def __enter__(self) -> "OutDirLock":
         try:
             os.mkdir(self.out_path)
+            self.created_dir = True
         except FileExistsError:
             if self.out_path.is_symlink() or not self.out_path.is_dir():
                 raise OutNotEmptyError(
