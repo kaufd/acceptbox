@@ -54,6 +54,13 @@ def _config_summary(project_config: ProjectConfig | None) -> dict | None:
     }
 
 
+def _config_error_summary(cfg_error: ConfigError) -> dict | None:
+    """Отпечаток отклонённого .acceptbox.toml для отчёта config-invalid."""
+    if cfg_error.commit is None:
+        return None
+    return {"path": CONFIG_FILENAME, "commit": cfg_error.commit, "sha256": cfg_error.sha256}
+
+
 def _remove_empty_dir(path: Path) -> None:
     try:
         path.rmdir()
@@ -71,7 +78,7 @@ def _reject_mode_mixing(args: argparse.Namespace, mode: str,
             if value is not None:
                 raise InputError(f"{flag} не используется в режиме command")
     else:
-        if args.tests:
+        if getattr(args, "tests", None):
             raise InputError("--tests не используется в режиме witnessbox")
         if cmd_argv is not None:
             raise InputError("разделитель -- (команда) не используется в режиме witnessbox")
@@ -80,7 +87,7 @@ def _reject_mode_mixing(args: argparse.Namespace, mode: str,
 def _reject_cli_cross_mode_mixing(args: argparse.Namespace,
                                   cmd_argv: list[str] | None) -> None:
     """Явное смешивание command- и witnessbox-флагов на CLI, даже когда --mode опущен."""
-    has_command_flags = bool(args.tests) or cmd_argv is not None
+    has_command_flags = bool(getattr(args, "tests", None)) or cmd_argv is not None
     has_witnessbox_flags = any(
         value is not None
         for value in (args.inv, args.ebt_repo, args.ebt_ref,
@@ -181,15 +188,10 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
         repo = validate_repo_source(args.repo, flag="--repo")
         base = validate_commit_sha(args.base, flag="--base")
         repro = validate_commit_sha(args.repro, flag="--repro")
-        if args.head is not None:
-            head = validate_commit_sha(args.head, flag="--head")
-        else:
-            try:
-                resolved_head = resolve_repo_head(repo, git_env)
-            except GitError as head_error:
-                raise InputError(
-                    f"не удалось разрешить HEAD из --repo: {head_error}") from head_error
-            head = validate_commit_sha(resolved_head, flag="--head")
+        # Опущенный --head резолвится после проверки git (стадия 3a), чтобы сбой
+        # стал gate-error с accept.json, а не ошибкой CLI.
+        head: str | None = (validate_commit_sha(args.head, flag="--head")
+                            if args.head is not None else None)
 
         auto_out = args.out is None
         out_path: Path | None = None
@@ -240,6 +242,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     ebt_sha: str | None = cli_ebt_sha
     approved_tree: str | None = cli_approved_tree
     project_config: ProjectConfig | None = None
+    config_summary: dict | None = None
 
     witnessbox_block = None
     wb_info: dict | None = None
@@ -262,7 +265,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "timeout_sec": timeout,
             "protect": protect,
             "env_keys": env_keys,
-            "config": _config_summary(project_config),
+            "config": config_summary,
         }
         if mode == "command":
             inputs_block["command"] = cmd
@@ -314,12 +317,21 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     try:
         try:
             with lock:
-                # Стадия 3a: git.
+                # Стадия 3a: git, затем резолв опущенного --head в полный SHA (L22).
                 if probe_git()["status"] != "ok":
                     return finish(error_verdict("gate-error", "git недоступен или сломан"))
+                if head is None:
+                    try:
+                        head = validate_commit_sha(resolve_repo_head(repo, git_env),
+                                                   flag="--head")
+                    except (GitError, InputError) as head_error:
+                        return finish(error_verdict(
+                            "gate-error", f"не удалось разрешить HEAD из --repo: {head_error}"))
+                    runs["head"] = skipped_run(head, NOT_RUN_REASON)
 
                 try:
-                    with TemporaryDirectory(prefix="acceptbox-run-") as temp_name:
+                    with TemporaryDirectory(prefix="acceptbox-run-",
+                                            ignore_cleanup_errors=True) as temp_name:
                         temp = Path(temp_name)
                         # Стадия 5a: клон --repo и чтение .acceptbox.toml строго из base (L23).
                         clone = temp / "repo"
@@ -330,7 +342,9 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         try:
                             project_config = load_config_from_commit(clone, git_env, base)
                         except ConfigError as cfg_error:
+                            config_summary = _config_error_summary(cfg_error)
                             return finish(error_verdict("config-invalid", str(cfg_error)))
+                        config_summary = _config_summary(project_config)
 
                         # Слияние CLI + .acceptbox.toml + дефолты L22.
                         mode = (args.mode
@@ -545,11 +559,13 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                     return finish(error_verdict("gate-error", f"сбой git: {git_failure}"))
                 except EbtPathMissing as missing:
                     return finish(inputs_untrusted(str(missing)))
+                except OSError as io_failure:
+                    return finish(error_verdict("gate-error", f"сбой окружения: {io_failure}"))
         except OutNotEmptyError as occupied:
             print(f"acceptbox: {occupied}", file=sys.stderr)
             return 2
         except OSError as io_failure:
-            remove_unused_out = auto_out
+            remove_unused_out = auto_out or lock.created_dir
             print(f"acceptbox: сбой окружения: {io_failure}", file=sys.stderr)
             return 2
     finally:
@@ -585,8 +601,6 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             raise InputError("укажите хотя бы один --green <sha> или --red <sha>")
         greens = [validate_commit_sha(sha, flag="--green") for sha in args.green or []]
         reds = [validate_commit_sha(sha, flag="--red") for sha in args.red or []]
-        cli_tests = [validate_pathspec(item, flag="--tests")
-                     for item in args.tests or []]
         if cmd_argv is not None and not cmd_argv:
             raise InputError("после -- обязательна непустая команда")
         cli_inv_list = (parse_invariants(args.inv)
@@ -630,13 +644,13 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     timeout = cli_timeout if cli_timeout is not None else DEFAULT_TIMEOUT_SEC
     env_keys = sorted({key for key, _ in cli_env_entries})
     cmd: list[str] | None = list(cmd_argv) if cmd_argv is not None else None
-    tests: list[str] | None = cli_tests if cli_tests else []
     inv_list: list[str] | None = cli_inv_list
     ebt_repo: str | None = cli_ebt_repo
     ebt_ref: str | None = cli_ebt_ref
     ebt_sha: str | None = cli_ebt_sha
     approved_tree: str | None = cli_approved_tree
     project_config: ProjectConfig | None = None
+    config_summary: dict | None = None
 
     witnessbox_block = None
     wb_info: dict | None = None
@@ -650,11 +664,10 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
         inputs_block: dict = {
             "timeout_sec": timeout,
             "env_keys": env_keys,
-            "config": _config_summary(project_config),
+            "config": config_summary,
         }
         if mode == "command":
             inputs_block["command"] = cmd
-            inputs_block["tests"] = tests
         else:
             inputs_block["inv"] = inv_list
             inputs_block["ebt"] = {
@@ -702,7 +715,8 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                     return finish("ERROR", 2, "gate-error", "git недоступен или сломан")
 
                 try:
-                    with TemporaryDirectory(prefix="acceptbox-calibrate-") as temp_name:
+                    with TemporaryDirectory(prefix="acceptbox-calibrate-",
+                                            ignore_cleanup_errors=True) as temp_name:
                         temp = Path(temp_name)
                         clone = temp / "repo"
                         clone_no_checkout(repo, clone, git_env)
@@ -713,7 +727,9 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             try:
                                 project_config = load_config_from_commit(clone, git_env, base)
                             except ConfigError as cfg_error:
+                                config_summary = _config_error_summary(cfg_error)
                                 return finish("ERROR", 2, "config-invalid", str(cfg_error))
+                            config_summary = _config_summary(project_config)
 
                         mode = (args.mode
                                 or (project_config.mode
@@ -732,10 +748,6 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         try:
                             _reject_mode_mixing(args, mode, cmd_argv)
                             if mode == "command":
-                                tests = (cli_tests if cli_tests
-                                         else (list(project_config.command_tests)
-                                               if project_config and project_config.command_tests
-                                               else []))
                                 cmd = (list(cmd_argv) if cmd_argv is not None
                                        else (list(project_config.command_argv)
                                              if project_config and project_config.command_argv
@@ -841,6 +853,8 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                     return finish("FAILED", 1, "inputs-untrusted", str(untrusted))
                 except EbtPathMissing as missing:
                     return finish("FAILED", 1, "inputs-untrusted", str(missing))
+                except OSError as io_failure:
+                    return finish("ERROR", 2, "gate-error", f"сбой окружения: {io_failure}")
 
                 if any(item["status"] == "error" for item in results):
                     return finish("ERROR", 2, "gate-error",
@@ -856,7 +870,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             print(f"acceptbox: {occupied}", file=sys.stderr)
             return 2
         except OSError as io_failure:
-            remove_unused_out = auto_out
+            remove_unused_out = auto_out or lock.created_dir
             print(f"acceptbox: сбой окружения: {io_failure}", file=sys.stderr)
             return 2
     finally:
@@ -951,8 +965,6 @@ def _add_calibrate_flags(subparser: argparse.ArgumentParser) -> None:
         help="таймаут одного прогона в секундах (по умолчанию из .acceptbox.toml или 600)")
     subparser.add_argument("--env", action="append",
                             help="переменная окружения KEY[=VAL] (повторяемый)")
-    subparser.add_argument("--tests", action="append",
-                            help="pathspec репро-теста (повторяемый, только command)")
     subparser.add_argument("--inv", help="инварианты через запятую (только witnessbox)")
     subparser.add_argument(
         "--ebt-repo",

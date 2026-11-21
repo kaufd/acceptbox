@@ -7,13 +7,15 @@
 - ``[witnessbox]``: ``ebt_repo`` (строка), ``ebt_ref`` (строка).
 
 Неизвестные ключи, пер-задачные поля (``inv``, ``ebt_sha``, ``approved_tree``,
-``base``, ``repro``, ``head``, ``repo``, ``out``), симлинки и невалидные типы
-отклоняются с ConfigError.
+``base``, ``repro``, ``head``, ``repo``, ``out``), симлинки, невалидные типы и
+относительный локальный путь ``ebt_repo`` отклоняются с ConfigError.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,10 +32,18 @@ _TOP_KEYS = frozenset({"format", "mode", "timeout", "protect", "env",
 _COMMAND_KEYS = frozenset({"tests", "argv"})
 _WITNESSBOX_KEYS = frozenset({"ebt_repo", "ebt_ref"})
 _VALID_MODES = frozenset({"command", "witnessbox"})
+# URL (scheme://) или scp-подобный адрес host:path — не локальный путь.
+_REMOTE_SOURCE_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://|[^/]+:")
 
 
 class ConfigError(ValueError):
-    """Некорректный .acceptbox.toml в базовом коммите → config-invalid (код 2)."""
+    """Некорректный .acceptbox.toml в базовом коммите → config-invalid (код 2).
+
+    ``commit`` и ``sha256`` заполняет load_config_from_commit для отчёта.
+    """
+
+    commit: str | None = None
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +183,11 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
                     raw_ebt_repo, flag=f"{CONFIG_FILENAME}: [witnessbox].ebt_repo")
             except InputError as error:
                 raise ConfigError(str(error)) from error
+            # Относительный путь зависел бы от каталога запуска acceptbox, а не от --repo.
+            if not _REMOTE_SOURCE_RE.match(wb_ebt_repo) and not os.path.isabs(wb_ebt_repo):
+                raise ConfigError(
+                    f"{CONFIG_FILENAME}: [witnessbox].ebt_repo должен быть URL или "
+                    f"абсолютным путём (получено: {raw_ebt_repo!r})")
         if "ebt_ref" in wb_table:
             raw_ebt_ref = wb_table["ebt_ref"]
             if not isinstance(raw_ebt_ref, str):
@@ -214,9 +229,16 @@ def load_config_from_commit(repo: Path, env: dict[str, str],
     if kind != b"blob" or mode not in (b"100644", b"100755"):
         mode_text = mode.decode("ascii", "replace")
         kind_text = kind.decode("ascii", "replace")
-        raise ConfigError(
+        error = ConfigError(
             f"{CONFIG_FILENAME} в коммите {commit_sha} должен быть обычным файлом "
             f"(получено: mode={mode_text}, kind={kind_text})"
         )
+        error.commit = commit_sha
+        raise error
     raw = run_git(repo, env, "cat-file", "blob", object_id.decode("ascii"))
-    return parse_config(raw, commit_sha=commit_sha)
+    try:
+        return parse_config(raw, commit_sha=commit_sha)
+    except ConfigError as error:
+        error.commit = commit_sha
+        error.sha256 = hashlib.sha256(raw).hexdigest()
+        raise

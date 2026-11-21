@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -10,6 +12,46 @@ from .git import strip_local_env_vars
 from .verdict import RunOutcome
 
 LOG_NAME = "command.log"
+# Сколько ждать закрытия pipe после SIGKILL группы (потомок мог уйти в свою сессию).
+_DRAIN_TIMEOUT_SEC = 5.0
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_process_group(argv: list[str], *, cwd: str, env: dict[str, str],
+                      timeout: float) -> subprocess.CompletedProcess:
+    """Аналог ``subprocess.run(capture_output=True, timeout=...)`` в отдельной сессии.
+
+    По таймауту и после завершения убивается вся группа процессов: потомки
+    (раннеры тестов, серверы) не переживают прогон и не мешают следующему.
+    Таймаут — ``subprocess.TimeoutExpired`` с выводом, собранным до SIGKILL.
+    """
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(process.pid)
+            try:
+                stdout, stderr = process.communicate(timeout=_DRAIN_TIMEOUT_SEC)
+            except subprocess.TimeoutExpired:
+                stdout = stderr = b""
+            raise subprocess.TimeoutExpired(argv, timeout, output=stdout,
+                                            stderr=stderr) from None
+    finally:
+        _kill_group(process.pid)
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        for stream in (process.stdout, process.stderr):
+            stream.close()
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def run_commit(worktree: Path, commit_sha: str, run_dir: Path, env: dict[str, str],
@@ -26,10 +68,8 @@ def run_commit(worktree: Path, commit_sha: str, run_dir: Path, env: dict[str, st
     stdout = stderr = b""
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            list(cmd_argv), cwd=str(worktree), env=clean_env,
-            timeout=timeout, shell=False, capture_output=True,
-        )
+        completed = run_process_group(list(cmd_argv), cwd=str(worktree),
+                                      env=clean_env, timeout=timeout)
     except subprocess.TimeoutExpired as expired:
         stdout, stderr = expired.stdout or b"", expired.stderr or b""
         status, reason = "error", f"команда превысила таймаут {timeout:g} с"

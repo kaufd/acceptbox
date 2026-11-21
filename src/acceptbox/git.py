@@ -189,21 +189,24 @@ def resolve_repo_head(source: str, env: dict[str, str]) -> str:
 def fetch_ref(repo: Path, env: dict[str, str], source: str, ref: str) -> str | None:
     """Вытянуть ссылку EBT и вернуть SHA коммита, на который она указывает.
 
-    Сначала явный fetch ссылки, при неудаче — все ссылки источника.
+    Короткое имя разрешается явно: сначала ``refs/heads/<ref>``, затем
+    ``refs/tags/<ref>`` (DWIM git fetch предпочёл бы одноимённый тег ветке).
+    При неудаче — все ссылки источника в том же порядке.
     None — ссылка не найдена (источник достижим); GitError — сбой источника/сети.
     """
     if ref.startswith("refs/"):
         candidates = (ref,)
     else:
         candidates = (f"refs/heads/{ref}", f"refs/tags/{ref}")
-    try:
-        _fetch(repo, env, source, f"+{ref}:refs/acceptbox-ebt/ref")
-    except GitError:
-        fetch_all_refs(repo, env, source)
-        mapped = tuple(f"refs/acceptbox-fetch/{name[len('refs/'):]}".replace("//", "/")
-                       for name in candidates)
-        return resolve_ref(repo, env, *mapped)
-    return resolve_ref(repo, env, "refs/acceptbox-ebt/ref")
+    for candidate in candidates:
+        try:
+            _fetch(repo, env, source, f"+{candidate}:refs/acceptbox-ebt/ref")
+        except GitError:
+            continue
+        return resolve_ref(repo, env, "refs/acceptbox-ebt/ref")
+    fetch_all_refs(repo, env, source)
+    mapped = tuple(f"refs/acceptbox-fetch/{name[len('refs/'):]}" for name in candidates)
+    return resolve_ref(repo, env, *mapped)
 
 
 def add_worktree(repo: Path, env: dict[str, str], sha: str, path: Path) -> None:

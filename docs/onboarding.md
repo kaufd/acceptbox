@@ -42,6 +42,7 @@ ebt_ref = "main"
 - Файл `.acceptbox.toml` автоматически защищён от изменений в `base..repro` и `base..head` (`protected-paths-changed`).
 - **Граница доверия `--base` (L26):** AcceptBox не проверяет принадлежность `--base` основной ветке. Значение `--base` должна передавать принимающая сторона (человек, CI или внешний оркестратор, например `git merge-base main HEAD`), а не проверяемый агент — иначе агент может задать поддельный `base` со своим `.acceptbox.toml`.
 - `protect` из конфига и `--protect` из CLI суммируются; `tests`, `argv`, `mode`, `timeout`, `ebt_repo`, `ebt_ref` можно переопределить явными флагами CLI.
+- `[witnessbox].ebt_repo` в конфиге — только URL или абсолютный путь.
 
 ## 3. Быстрый старт в режиме `command` (без WitnessBox)
 
@@ -87,7 +88,7 @@ acceptbox accept \
      --ebt-sha <ebt_sha> \
      --approved-tree "$APPROVED_TREE"
    ```
-   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`) и `--out` (по умолчанию каталог в `TMPDIR`) опциональны. Если `mode = "witnessbox"` и `[witnessbox].ebt_ref` заданы в `.acceptbox.toml` в `base`, можно опустить и `--mode`, и `--ebt-ref`.
+   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`) и `--out` (по умолчанию каталог в `TMPDIR`) опциональны. Если `mode = "witnessbox"` и `[witnessbox].ebt_ref` заданы в `.acceptbox.toml` в `base`, можно опустить и `--mode`, и `--ebt-ref`. Если `--ebt-repo` — локальный checkout (по умолчанию), проверка предка `--ebt-ref` идёт по локальной ветке и защищает слабо, опорой остаётся `--approved-tree`; для полной проверки L10 передайте URL основного репозитория.
 
 ## 5. Калибровка чувствительности (`calibrate`)
 

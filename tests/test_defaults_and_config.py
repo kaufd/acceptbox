@@ -188,6 +188,13 @@ class TestConfigUnit(unittest.TestCase):
         self.assertIsNone(minimal.witnessbox_ebt_repo)
         self.assertIsNone(minimal.witnessbox_ebt_ref)
 
+        for source in ("/srv/ebt-repo", "git@example.com:org/repo.git"):
+            with self.subTest(source=source):
+                cfg = config.parse_config(
+                    f'format = 1\n[witnessbox]\nebt_repo = "{source}"\n'.encode(),
+                    commit_sha="c" * 40)
+                self.assertEqual(cfg.witnessbox_ebt_repo, source)
+
     def test_parse_rejects_invalid_schema_types_and_unknown_keys(self) -> None:
         bad_cases = [
             b"\xff\xfe",
@@ -219,6 +226,8 @@ class TestConfigUnit(unittest.TestCase):
             b'format = 1\n[command]\nargv = ["  "]\n',
             b'format = 1\n[command]\ncommand = ["pytest"]\n',
             b'format = 1\n[witnessbox]\nebt_repo = "-evil"\n',
+            b'format = 1\n[witnessbox]\nebt_repo = "../ebt-repo"\n',
+            b'format = 1\n[witnessbox]\nebt_repo = "ebt-repo"\n',
             b'format = 1\n[witnessbox]\nebt_ref = "main..bad"\n',
             b'format = 1\n[witnessbox]\ninv = "INV-1"\n',
             b'format = 1\n[witnessbox]\napproved_tree = "' + b"a" * 64 + b'"\n',
@@ -293,6 +302,28 @@ class TestL22Defaults(unittest.TestCase):
             self.assertEqual(data["repo"]["head"], fx["head"])
             # Working tree of repo was not polluted
             self.assertEqual(_git(repo, "status", "--porcelain"), "")
+
+    def test_default_head_resolution_failure_is_gate_error_with_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unborn = root / "unborn"
+            _init_repo(unborn)
+            out = root / "out"
+            res = _run_cli([
+                "accept", "--repo", str(unborn), "--base", "a" * 40, "--repro", "b" * 40,
+                "--out", str(out), "--tests", "tests/", "--", PYTHON, "-c", "pass",
+            ])
+            self.assertEqual(res.returncode, 2, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "gate-error")
+            self.assertIn("HEAD", data["message"])
+            self.assertIsNone(data["repo"]["head"])
+
+    def test_calibrate_rejects_tests_flag(self) -> None:
+        res = _run_cli(["calibrate", "--green", "a" * 40, "--tests", "tests/",
+                        "--", PYTHON, "-c", "pass"])
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--tests", res.stderr)
 
     def test_explicit_head_still_requires_full_sha(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -645,6 +676,10 @@ class TestL23ProjectConfigE2E(unittest.TestCase):
                 self.assertEqual(data["result"], "ERROR")
                 self.assertEqual(data["reason_code"], "config-invalid")
                 self.assertEqual(_extract_report_path(res.stderr), out / "accept.json")
+                self.assertEqual(data["inputs"]["config"]["commit"], bad_base)
+                if content is not None:
+                    self.assertEqual(data["inputs"]["config"]["sha256"],
+                                     hashlib.sha256(content.encode("utf-8")).hexdigest())
 
     def test_dual_mode_config_witnessbox_and_cli_override(self) -> None:
         cfg_text = (

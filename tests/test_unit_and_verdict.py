@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -143,6 +144,10 @@ class TestInputs(unittest.TestCase):
         self.assertNotIn("BASE", env)
         self.assertEqual(keys, ["INHERITED_OK", "MISSING_KEY", "MY_VAR"])
 
+        # CLI passthrough of an absent variable removes the earlier config value.
+        merged, _ = inputs.build_runtime_env(caller, [("MY_VAR", "from-config"), ("MY_VAR", None)])
+        self.assertNotIn("MY_VAR", merged)
+
         wb_env, _ = inputs.build_runtime_env(
             caller, entries, base_sha="a" * 40, inv_csv="INV-1,INV-2",
         )
@@ -272,6 +277,59 @@ class TestWitnessboxClassify(unittest.TestCase):
                 gate_exit_code=1, failure_message=None, duration_ms=10, log_path="witnessbox.log",
             )
             self.assertEqual(out.status, "error")
+
+
+class TestWitnessboxMalformedFindings(unittest.TestCase):
+    def test_non_string_kind_or_inv_is_not_a_target_finding(self) -> None:
+        info = {"version": "0.10.0", "gate_sha256": "g" * 64}
+        gate = {"format": 1, "exit_code": 1, "reasons": ["checker_failed"], "commit": "a" * 40,
+                "spec_sha256": "b" * 64,
+                "verifier": {"distribution": "witnessbox", "version": "0.10.0",
+                             "gate_sha256": "g" * 64}}
+        report_data = {"findings": [{"kind": ["FALSE_PROOF"], "inv": "INV-1"},
+                                    {"kind": "FALSE_PROOF", "inv": ["INV-1"]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
+            (run_dir / "report.json").write_text(json.dumps(report_data), encoding="utf-8")
+            outcome = witnessbox.classify_gate_run(
+                run_dir, "a" * 40, "b" * 64, ["INV-1"], info,
+                gate_exit_code=1, failure_message=None, duration_ms=1, log_path=None)
+            self.assertEqual(outcome.status, "red-other")
+            self.assertEqual(witnessbox.read_findings_inv(run_dir), [])
+
+
+class TestProcessGroupAndRefs(unittest.TestCase):
+    def test_timeout_kills_grandchildren(self) -> None:
+        from acceptbox.command import run_process_group
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = Path(tmp) / "child.pid"
+            script = f"sleep 60 & echo $! > {pid_file}; wait"
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_process_group(["sh", "-c", script], cwd=tmp,
+                                  env=dict(os.environ), timeout=1)
+            child = int(pid_file.read_text().strip())
+            # Убитый внук ненадолго остаётся зомби, пока его не подберёт init.
+            for _ in range(50):
+                try:
+                    os.kill(child, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail(f"процесс-внук {child} пережил таймаут")
+
+    def test_fetch_ref_prefers_branch_over_same_named_tag(self) -> None:
+        from acceptbox.git import base_env, fetch_ref
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            _init_repo(src)
+            old = _commit_all(src, "old")
+            new = _commit_all(src, "new")
+            _git(src, "tag", "main", old)
+            dst = Path(tmp) / "dst"
+            _init_repo(dst)
+            self.assertEqual(fetch_ref(dst, base_env(), str(src), "main"), new)
 
 
 class TestVerdictMatrix(unittest.TestCase):
