@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .command import run_process_group
 from .git import strip_local_env_vars
 from .verdict import RunOutcome
 
@@ -122,9 +123,17 @@ def read_findings_inv(run_dir: Path) -> list[str]:
     findings = report.get("findings")
     if not isinstance(findings, list):
         return []
-    return [entry.get("inv") for entry in findings
-            if isinstance(entry, dict) and isinstance(entry.get("inv"), str)
-            and entry.get("kind") in TARGET_KINDS]
+    return [entry["inv"] for entry in findings if _is_target_finding(entry)]
+
+
+def _is_target_finding(entry: object, invariants: set[str] | None = None) -> bool:
+    """Целевая находка L9; нестроковые kind/inv (сломанная схема) не засчитываются."""
+    if not isinstance(entry, dict):
+        return False
+    kind, inv = entry.get("kind"), entry.get("inv")
+    if not isinstance(kind, str) or not isinstance(inv, str) or kind not in TARGET_KINDS:
+        return False
+    return invariants is None or inv in invariants
 
 
 def classify_gate_run(run_dir: Path, commit_sha: str, approved_spec_sha256: str,
@@ -210,7 +219,7 @@ def classify_gate_run(run_dir: Path, commit_sha: str, approved_spec_sha256: str,
             return outcome("invalid-report",
                            "красный без валидного report.json: findings недоступны", artifacts)
         matched = [entry for entry in report["findings"]
-                   if entry.get("kind") in TARGET_KINDS and entry.get("inv") in expected]
+                   if _is_target_finding(entry, expected)]
         if matched:
             kinds = ", ".join(sorted({str(entry.get("kind")) for entry in matched}))
             return outcome("red", f"witnessbox gate красный по нужной причине: {kinds}", artifacts)
@@ -235,8 +244,8 @@ def run_commit(worktree: Path, commit_sha: str, run_dir: Path, env: dict[str, st
     failure_message: str | None = None
     stdout = stderr = b""
     try:
-        completed = subprocess.run(argv, cwd=str(run_dir), env=clean_env,
-                                   timeout=timeout, shell=False, capture_output=True)
+        completed = run_process_group(argv, cwd=str(run_dir), env=clean_env,
+                                      timeout=timeout)
     except subprocess.TimeoutExpired as expired:
         stdout, stderr = expired.stdout or b"", expired.stderr or b""
         failure_message = f"witnessbox gate превысил таймаут {timeout:g} с"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 
 from .git import local_env_var_names
@@ -34,8 +35,10 @@ def validate_sha256(value: str, flag: str) -> str:
     return value.lower()
 
 
-def validate_timeout(value: str, flag: str = "--timeout") -> float:
+def validate_timeout(value: str | int | float, flag: str = "--timeout") -> float:
     """Положительное конечное число секунд."""
+    if isinstance(value, bool):
+        raise InputError(f"{flag} должен быть положительным числом секунд")
     try:
         timeout = float(value)
     except (TypeError, ValueError):
@@ -73,14 +76,18 @@ def validate_pathspec(value: str, flag: str) -> str:
 
 
 def validate_repo_source(value: str, flag: str) -> str:
-    """Путь или URL репозитория без управляющих символов и ведущего дефиса."""
+    """Путь или URL репозитория без управляющих символов и ведущего дефиса.
+
+    Ведущая ``~`` раскрывается здесь один раз: дальше путь одинаково видят
+    резолв HEAD, клонирование и отчёт.
+    """
     if not isinstance(value, str) or not value.strip():
         raise InputError(f"{flag}: укажите путь или URL репозитория")
     if value.startswith("-"):
         raise InputError(f"{flag}: значение не может начинаться с '-'")
     if "\x00" in value or any(ord(char) < 32 for char in value):
         raise InputError(f"{flag}: недопустимые управляющие символы")
-    return value
+    return os.path.expanduser(value)
 
 
 def validate_ref(value: str, flag: str) -> str:
@@ -147,8 +154,11 @@ def build_runtime_env(environ: dict[str, str], env_entries: list[tuple[str, str 
     for key, value in env_entries:
         env_keys.append(key)
         if value is None:
+            # Проброс отсутствующей переменной снимает и значение из конфига (приоритет CLI).
             if key in environ:
                 env[key] = environ[key]
+            else:
+                env.pop(key, None)
         else:
             env[key] = value
     # Оборонительно: наследуемые EBT_* и переменные git-изоляции отбрасываются всегда.
