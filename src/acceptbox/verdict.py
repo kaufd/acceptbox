@@ -48,6 +48,11 @@ def no_invariants() -> Verdict:
     return rejected("no-invariants", "--inv не содержит ни одного инварианта; приёмка невозможна")
 
 
+def base_not_on_ref(message: str) -> Verdict:
+    """Стадия 5a: --base не лежит в доверенной ветке --base-ref (L29)."""
+    return rejected("base-not-on-ref", message)
+
+
 def inputs_untrusted(message: str) -> Verdict:
     """Стадия 6: нарушение доверия к ebt/ (L10)."""
     return rejected("inputs-untrusted", f"доверенные входы EBT не подтверждены: {message}")

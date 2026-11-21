@@ -14,7 +14,7 @@ AcceptBox поддерживает два режима приёмки:
 ## Установка
 
 ```sh
-uv tool install acceptbox==0.1.0
+uv tool install acceptbox==0.2.0
 ```
 
 Для режима `--mode witnessbox` дополнительно установите WitnessBox (опционально):
@@ -55,7 +55,7 @@ ebt_ref = "main"
 **Правила доверия (fail-closed):**
 - `.acceptbox.toml` читается строго из объектов Git базового коммита `base` (в `calibrate` — только при переданном `--base`), а не из рабочего дерева или веток `repro`/`head`;
 - `.acceptbox.toml` автоматически защищается от изменений, удаления и переименования в `base..repro` и `base..head` (как `--protect`);
-- **граница доверия `--base` (L26):** конфигу можно доверять ровно настолько, насколько можно доверять `--base`. AcceptBox не проверяет принадлежность `--base` основной ветке — `--base` должна задавать принимающая сторона (человек, CI или внешний оркестратор, например через `git merge-base main HEAD`), а не проверяемый агент;
+- **граница доверия `--base` (L26, L29):** конфигу можно доверять ровно настолько, насколько можно доверять `--base`. Передайте `--base-ref main` (только CLI): AcceptBox до чтения конфига проверит, что `--base` — предок `main` из `origin`, и иначе откажет с `base-not-on-ref`. Без `--base-ref` значение `--base` должна задавать принимающая сторона (человек, CI или внешний оркестратор, например через `git merge-base main HEAD`), а не проверяемый агент;
 - все присутствующие секции валидируются строго: неизвестные ключи, пер-задачные поля (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`), относительный локальный путь `[witnessbox].ebt_repo`, симлинки и ошибки TOML завершаются с `ERROR` (`config-invalid`, код `2`); блок `inputs.config` такого отчёта содержит `commit` и `sha256` отклонённого файла;
 - `env` допускает обычные переменные (включая `GIT_SSH_COMMAND` или `GIT_AUTHOR_NAME`), но запрещает `BASE`, любые `EBT_*` и переменные git-изоляции из `git rev-parse --local-env-vars`;
 - `protect` из конфига и CLI суммируются (CLI не может ослабить защиту из `base`), `env` сливается с приоритетом CLI по ключу (`--env KEY` без значения при отсутствии `KEY` в окружении снимает значение из конфига), остальные параметры переопределяются явными флагами CLI.
@@ -74,7 +74,8 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 - `--mode` по умолчанию берётся из `.acceptbox.toml` или равен `command`;
 - `--repo` по умолчанию `.`;
 - `--head` по умолчанию `HEAD` из `--repo`; резолв в полный SHA выполняется сразу после проверки `git`, его сбой даёт `gate-error` с отчётом (явно переданный `--head` по-прежнему принимается только как полный 40/64-hex SHA). **Важно:** незакоммиченные правки рабочего дерева не проверяются, а если `--repo` указан как URL, через `git ls-remote` берётся удалённый `HEAD` (обычно ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно);
-- `--ebt-repo` в `witnessbox` по умолчанию берётся из `.acceptbox.toml` или равен `--repo`. Если это локальный checkout, проверка «`--ebt-sha` — предок `--ebt-ref`» идёт по локальной ветке, которую может сдвинуть любой, кто пишет в этот checkout: опорой доверия остаётся только `--approved-tree`. Для полной проверки L10 передайте в `--ebt-repo` URL основного репозитория (L27);
+- `--ebt-repo` в `witnessbox` по умолчанию берётся из `.acceptbox.toml` или равен `--repo`;
+- опциональный `--base-ref <ветка>` проверяет, что `--base` лежит в основной ветке. Ветка для `--base-ref` и `--ebt-ref` берётся из доверенного источника (L29): для URL — из него самого, для локального пути — из его remote `origin` (локальные ветки агент может просто сдвинуть). Если `origin` нет, проверка идёт по локальной ветке, а в отчёте пишется `ref_source_kind: "local"` (слабая проверка). Граница доверия: URL `origin` сам берётся из `.git/config` checkout: агент, который может писать в `.git/config`, может перенаправить `origin` или удалить его. Источник ветки записывается в отчёт (`ref_source`, `ref_source_kind`) — сверяйте его, а для полной гарантии запускайте приёмку там, где агент не пишет в checkout (CI), или передавайте `--repo` / `--ebt-repo` как URL основного репозитория;
 - `--out` по умолчанию атомарно создаётся как новый пустой каталог в системном `TMPDIR`, а путь к `accept.json` выводится в итоговое сообщение.
 
 ### Режим `command`
@@ -82,7 +83,7 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 Минимальный запуск (при наличии `.acceptbox.toml` в `base`, из корня репозитория):
 
 ```sh
-acceptbox accept --base "$(git merge-base main HEAD)" --repro <40-hex-sha>
+acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <40-hex-sha>
 ```
 
 Полный запуск с явными флагами (без `.acceptbox.toml`):
@@ -115,6 +116,7 @@ acceptbox accept \
   --ebt-ref main \
   --ebt-sha <40-hex-sha> \
   --approved-tree <64-hex-sha256> \
+  [--base-ref main] \
   [--repo /path/to/project] \
   [--head <40-hex-sha>] \
   [--ebt-repo /path/to/ebt-repo] \
@@ -164,14 +166,14 @@ acceptbox calibrate \
 ## Коды выхода и отчёты
 
 - `0` — `ACCEPTED` (для `accept`) / `CALIBRATED` (для `calibrate`);
-- `1` — `REJECTED` / `FAILED` (отказ по правилам приёмки или калибровки);
+- `1` — `REJECTED` / `FAILED` (отказ по правилам приёмки или калибровки, в том числе `base-not-on-ref` при `--base-ref`);
 - `2` — `ERROR` (ошибка аргументов CLI, непустой `--out`, некорректный `.acceptbox.toml` `config-invalid`, сбой `git`, отсутствующий/несовместимый `witnessbox`, нарушение схемы отчёта, ошибка прогона `gate-error`).
 
 **Правило записи отчёта при коде `2` (L26):**
 - `accept.json` / `calibrate.json` **не создаётся** при ошибках синтаксиса CLI, при `out-not-empty`, а также при нехватке обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или смешивании флагов режимов, обнаруженных после чтения `base:.acceptbox.toml`; если пустой каталог `--out` был создан текущим запуском, он удаляется;
 - во всех остальных случаях кода `2` после захвата `--out` (включая `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, `gate-error`) отчёт записывается атомарно, а путь к нему печатается в `stderr`.
 
-Подробнее о подключении проекта см. [docs/onboarding.md](docs/onboarding.md) и журнал решений [docs/decisions.md](docs/decisions.md).
+Подробнее о подключении проекта см. [docs/onboarding.md](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) и журнал решений [docs/decisions.md](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md).
 
 ## Разработка и сборка
 

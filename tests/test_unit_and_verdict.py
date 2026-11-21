@@ -332,6 +332,33 @@ class TestProcessGroupAndRefs(unittest.TestCase):
             self.assertEqual(fetch_ref(dst, base_env(), str(src), "main"), new)
 
 
+class TestTrustedRefSource(unittest.TestCase):
+    def test_remote_origin_and_local_fallback(self) -> None:
+        from acceptbox.git import base_env, trusted_ref_source
+        env = base_env()
+        self.assertEqual(trusted_ref_source("https://h/r.git", env), ("https://h/r.git", "remote"))
+        self.assertEqual(trusted_ref_source("git@h:o/r.git", env), ("git@h:o/r.git", "remote"))
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _init_repo(repo)
+            self.assertEqual(trusted_ref_source(str(repo), env), (str(repo), "local"))
+            # Относительный origin отсчитывается от репозитория, а не от каталога запуска.
+            _git(repo, "remote", "add", "origin", "../upstream.git")
+            self.assertEqual(trusted_ref_source(str(repo), env),
+                             (os.path.join(tmp, "upstream.git"), "origin"))
+            _git(repo, "remote", "set-url", "origin", "/srv/upstream.git")
+            self.assertEqual(trusted_ref_source(str(repo), env), ("/srv/upstream.git", "origin"))
+
+    def test_option_like_origin_url_rejected(self) -> None:
+        from acceptbox.git import GitError, base_env, trusted_ref_source
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            _init_repo(repo)
+            _git(repo, "config", "remote.origin.url", "--upload-pack=touch PWN;false :")
+            with self.assertRaises(GitError):
+                trusted_ref_source(str(repo), base_env())
+
+
 class TestVerdictMatrix(unittest.TestCase):
     def _o(self, status: str) -> RunOutcome:
         return RunOutcome(status=status, exit_code=0, reason=status,

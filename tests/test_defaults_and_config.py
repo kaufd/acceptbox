@@ -149,6 +149,14 @@ def _make_witnessbox_in_repo_fixture(root: Path, *, config_toml: str | None = No
     }
 
 
+def _add_origin(repo: Path) -> Path:
+    """Канонический bare-репозиторий как remote origin рабочего checkout."""
+    upstream = repo.parent / "upstream.git"
+    _git(repo.parent, "clone", "-q", "--bare", "--no-local", str(repo), str(upstream))
+    _git(repo, "remote", "add", "origin", str(upstream))
+    return upstream
+
+
 class TestConfigUnit(unittest.TestCase):
     def test_parse_valid_full_and_minimal_config(self) -> None:
         raw = (
@@ -264,6 +272,97 @@ class TestConfigUnit(unittest.TestCase):
             (repo3 / "a.txt").write_text("hi\n", encoding="utf-8")
             sha3 = _commit(repo3, "no config")
             self.assertIsNone(config.load_config_from_commit(repo3, base_env(), sha3))
+
+
+COMMAND_CONFIG = (
+    'format = 1\n[command]\ntests = ["tests/"]\n'
+    f'argv = [{json.dumps(PYTHON)}, "-m", "unittest", "discover", "-s", "tests"]\n'
+)
+
+
+class TestBaseRef(unittest.TestCase):
+    def _accept(self, fx: dict, out: Path, base: str, repro: str, head: str,
+                *extra: str, env: dict[str, str] | None = None,
+                ) -> tuple[subprocess.CompletedProcess[str], dict]:
+        res = _run_cli(["accept", "--repo", str(fx["repo"]), "--base", base, "--repro", repro,
+                        "--head", head, "--out", str(out), *extra], env=env)
+        return res, json.loads((out / "accept.json").read_text(encoding="utf-8"))
+
+    def test_base_on_origin_main_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            _add_origin(Path(fx["repo"]))
+            res, data = self._accept(fx, Path(tmp) / "out", fx["base"], fx["repro"], fx["head"],
+                                     "--base-ref", "main")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(data["checks"]["base_ref"]["status"], "ok")
+            self.assertEqual(data["checks"]["base_ref"]["ref_source_kind"], "origin")
+            self.assertEqual(data["inputs"]["base_ref"], "main")
+
+    def test_forged_base_rejected_before_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            repo = Path(fx["repo"])
+            _add_origin(repo)
+            # Агент: свой base с ослабленным конфигом и локальная main, сдвинутая на него.
+            _git(repo, "checkout", "-q", "--detach", str(fx["base"]))
+            (repo / ".acceptbox.toml").write_text(
+                'format = 1\n[command]\ntests = ["tests/"]\n'
+                f'argv = [{json.dumps(PYTHON)}, "-c", "open(\'MARKER\', \'w\')"]\n',
+                encoding="utf-8")
+            forged = _commit(repo, "forged base")
+            (repo / "tests" / "test_repro.py").write_text("# repro\n", encoding="utf-8")
+            repro = _commit(repo, "repro")
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+            head = _commit(repo, "head")
+            _git(repo, "update-ref", "refs/heads/main", forged)
+
+            res, data = self._accept(fx, Path(tmp) / "out", forged, repro, head,
+                                     "--base-ref", "main")
+            self.assertEqual(res.returncode, 1, res.stderr)
+            self.assertEqual(data["reason_code"], "base-not-on-ref")
+            self.assertIsNone(data["inputs"]["config"])
+            self.assertEqual(data["runs"]["repro"]["status"], "skipped")
+
+    def test_missing_ref_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            _add_origin(Path(fx["repo"]))
+            res, data = self._accept(fx, Path(tmp) / "out", fx["base"], fx["repro"], fx["head"],
+                                     "--base-ref", "no-such-branch")
+            self.assertEqual(res.returncode, 1, res.stderr)
+            self.assertEqual(data["reason_code"], "base-not-on-ref")
+            self.assertIsNone(data["checks"]["base_ref"]["ref_commit"])
+
+    def test_option_like_origin_url_is_gate_error_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            pwn = Path(tmp) / "PWNED"
+            # Без "/" в URL: иначе значение выглядит как относительный путь, а не адрес.
+            _git(Path(fx["repo"]), "config", "remote.origin.url",
+                 '--upload-pack=touch "$PWNFILE";false :')
+            res, data = self._accept(fx, Path(tmp) / "out", fx["base"], fx["repro"], fx["head"],
+                                     "--base-ref", "main",
+                                     env={**os.environ, "PWNFILE": str(pwn)})
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertEqual(data["reason_code"], "gate-error")
+            self.assertFalse(pwn.exists())
+
+    def test_without_base_ref_check_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            res, data = self._accept(fx, Path(tmp) / "out", fx["base"], fx["repro"], fx["head"])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(data["checks"]["base_ref"], {"status": "skipped"})
+            self.assertIsNone(data["inputs"]["base_ref"])
+
+    def test_no_origin_falls_back_to_local_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = _make_command_fixture(Path(tmp), config_toml=COMMAND_CONFIG)
+            res, data = self._accept(fx, Path(tmp) / "out", fx["base"], fx["repro"], fx["head"],
+                                     "--base-ref", "main")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(data["checks"]["base_ref"]["ref_source_kind"], "local")
 
 
 class TestL22Defaults(unittest.TestCase):
@@ -421,6 +520,35 @@ class TestL22Defaults(unittest.TestCase):
             self.assertEqual(data["result"], "ACCEPTED")
             self.assertEqual(data["repo"]["head"], fx["head"])
             self.assertEqual(data["inputs"]["ebt"]["repo"], ".")
+
+    def test_ebt_ref_taken_from_origin_not_local_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fx = _make_witnessbox_in_repo_fixture(root)
+            repo = Path(fx["repo"])
+            _add_origin(repo)
+            # Агент: неутверждённый ebt/ на боковом коммите и локальная main, сдвинутая на него.
+            _git(repo, "checkout", "-q", "--detach", fx["base"])
+            (repo / "ebt" / "spec.toml").write_text("inv_demo = 2\n", encoding="utf-8")
+            side = _commit(repo, "unapproved ebt")
+            _git(repo, "update-ref", "refs/heads/main", side)
+            pin = _run_cli(["pin", "--ebt-repo", str(repo), "--ebt-sha", side])
+            self.assertEqual(pin.returncode, 0, pin.stderr)
+
+            out = root / "out"
+            res = _run_cli([
+                "accept", "--mode", "witnessbox", "--repo", str(repo),
+                "--base", fx["base"], "--repro", fx["repro"], "--head", fx["head"],
+                "--inv", "INV-1", "--ebt-ref", "main",
+                "--ebt-sha", side, "--approved-tree", pin.stdout.strip(),
+                "--out", str(out),
+            ], env=fx["env"])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "inputs-untrusted")
+            self.assertIn("не является предком", data["checks"]["ebt_trust"]["reason"])
+            self.assertEqual(data["checks"]["ebt_trust"]["ref_source_kind"], "origin")
+            self.assertEqual(data["inputs"]["ebt"]["ref_source_kind"], "origin")
 
     def test_pin_still_requires_ebt_repo(self) -> None:
         res = _run_cli(["pin", "--ebt-sha", "a" * 40])

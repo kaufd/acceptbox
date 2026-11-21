@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from .git import run_git
+from .git import is_remote_source, run_git
 from .inputs import (InputError, parse_env_entry, validate_pathspec,
                      validate_ref, validate_repo_source, validate_timeout)
 
@@ -32,8 +31,6 @@ _TOP_KEYS = frozenset({"format", "mode", "timeout", "protect", "env",
 _COMMAND_KEYS = frozenset({"tests", "argv"})
 _WITNESSBOX_KEYS = frozenset({"ebt_repo", "ebt_ref"})
 _VALID_MODES = frozenset({"command", "witnessbox"})
-# URL (scheme://) или scp-подобный адрес host:path — не локальный путь.
-_REMOTE_SOURCE_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://|[^/]+:")
 
 
 class ConfigError(ValueError):
@@ -184,7 +181,7 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
             except InputError as error:
                 raise ConfigError(str(error)) from error
             # Относительный путь зависел бы от каталога запуска acceptbox, а не от --repo.
-            if not _REMOTE_SOURCE_RE.match(wb_ebt_repo) and not os.path.isabs(wb_ebt_repo):
+            if not is_remote_source(wb_ebt_repo) and not os.path.isabs(wb_ebt_repo):
                 raise ConfigError(
                     f"{CONFIG_FILENAME}: [witnessbox].ebt_repo должен быть URL или "
                     f"абсолютным путём (получено: {raw_ebt_repo!r})")

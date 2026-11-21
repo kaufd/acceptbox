@@ -11,7 +11,7 @@ AcceptBox проверяет цепочку коммитов `base → repro →
 ## 1. Установка и проверка окружения
 
 ```sh
-uv tool install acceptbox==0.1.0
+uv tool install acceptbox==0.2.0
 # Опционально (нужно только для --mode witnessbox):
 uv tool install 'witnessbox>=0.10.0'
 
@@ -40,7 +40,7 @@ ebt_ref = "main"
 
 - Конфиг читается **строго из коммита `base`**, никогда из рабочего дерева или проверяемых коммитов `repro`/`head`.
 - Файл `.acceptbox.toml` автоматически защищён от изменений в `base..repro` и `base..head` (`protected-paths-changed`).
-- **Граница доверия `--base` (L26):** AcceptBox не проверяет принадлежность `--base` основной ветке. Значение `--base` должна передавать принимающая сторона (человек, CI или внешний оркестратор, например `git merge-base main HEAD`), а не проверяемый агент — иначе агент может задать поддельный `base` со своим `.acceptbox.toml`.
+- **Граница доверия `--base` (L26, L29):** передавайте `--base-ref main` — AcceptBox до чтения конфига проверит, что `--base` лежит в `main` из `origin` рабочего checkout. Без флага значение `--base` должна передавать принимающая сторона (человек, CI или внешний оркестратор), а не проверяемый агент — иначе агент может задать поддельный `base` со своим `.acceptbox.toml`. Настройте у checkout remote `origin` на основной репозиторий: без него проверка идёт по локальной ветке (`ref_source_kind: "local"`). Граница доверия: URL `origin` сам берётся из `.git/config` checkout: агент, который может писать в `.git/config`, может перенаправить `origin` или удалить его. Источник ветки записывается в отчёт (`ref_source`, `ref_source_kind`) — сверяйте его, а для полной гарантии запускайте приёмку там, где агент не пишет в checkout (CI), или передавайте `--repo` / `--ebt-repo` как URL основного репозитория.
 - `protect` из конфига и `--protect` из CLI суммируются; `tests`, `argv`, `mode`, `timeout`, `ebt_repo`, `ebt_ref` можно переопределить явными флагами CLI.
 - `[witnessbox].ebt_repo` в конфиге — только URL или абсолютный путь.
 
@@ -51,7 +51,7 @@ ebt_ref = "main"
 Если `.acceptbox.toml` уже закоммичен в `base`, из корня репозитория достаточно выполнить:
 
 ```sh
-acceptbox accept --base "$(git merge-base main HEAD)" --repro <repro_sha>
+acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <repro_sha>
 ```
 
 Здесь `--repo` по умолчанию `.`, `--head` немедленно резолвится из `HEAD` текущего репозитория в полный SHA, а `--out` атомарно создаётся в `TMPDIR` (путь к `accept.json` печатается в итоговом сообщении).
@@ -81,6 +81,7 @@ acceptbox accept \
    ```sh
    acceptbox accept \
      --mode witnessbox \
+     --base-ref main \
      --base <base_sha> \
      --repro <repro_sha> \
      --inv INV-1 \
@@ -88,7 +89,7 @@ acceptbox accept \
      --ebt-sha <ebt_sha> \
      --approved-tree "$APPROVED_TREE"
    ```
-   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`) и `--out` (по умолчанию каталог в `TMPDIR`) опциональны. Если `mode = "witnessbox"` и `[witnessbox].ebt_ref` заданы в `.acceptbox.toml` в `base`, можно опустить и `--mode`, и `--ebt-ref`. Если `--ebt-repo` — локальный checkout (по умолчанию), проверка предка `--ebt-ref` идёт по локальной ветке и защищает слабо, опорой остаётся `--approved-tree`; для полной проверки L10 передайте URL основного репозитория.
+   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`) и `--out` (по умолчанию каталог в `TMPDIR`) опциональны. Если `mode = "witnessbox"` и `[witnessbox].ebt_ref` заданы в `.acceptbox.toml` в `base`, можно опустить и `--mode`, и `--ebt-ref`. Если `--ebt-repo` — локальный путь (по умолчанию), ветка `--ebt-ref` берётся из его remote `origin`; без `origin` — из локальной ветки с пометкой `ref_source_kind: "local"` в отчёте, и тогда опорой доверия остаётся только `--approved-tree`.
 
 ## 5. Калибровка чувствительности (`calibrate`)
 
