@@ -20,7 +20,7 @@ acceptbox --installation
 
 `acceptbox --installation` возвращает код `0`, если работают `git` и `acceptbox`, даже когда `witnessbox` не установлен (`witnessbox.status = "missing"`).
 
-## 2. Настройка `.acceptbox.toml` (рекомендуется, L23, L25)
+## 2. Настройка `.acceptbox.toml` (рекомендуется, L23, L25, L26)
 
 Добавьте и закоммитьте `.acceptbox.toml` в базовой ветке репозитория (например, `main`), чтобы не повторять параметры при каждом запуске:
 
@@ -40,6 +40,7 @@ ebt_ref = "main"
 
 - Конфиг читается **строго из коммита `base`**, никогда из рабочего дерева или проверяемых коммитов `repro`/`head`.
 - Файл `.acceptbox.toml` автоматически защищён от изменений в `base..repro` и `base..head` (`protected-paths-changed`).
+- **Граница доверия `--base` (L26):** AcceptBox не проверяет принадлежность `--base` основной ветке. Значение `--base` должна передавать принимающая сторона (человек, CI или внешний оркестратор, например `git merge-base main HEAD`), а не проверяемый агент — иначе агент может задать поддельный `base` со своим `.acceptbox.toml`.
 - `protect` из конфига и `--protect` из CLI суммируются; `tests`, `argv`, `mode`, `timeout`, `ebt_repo`, `ebt_ref` можно переопределить явными флагами CLI.
 
 ## 3. Быстрый старт в режиме `command` (без WitnessBox)
@@ -49,16 +50,17 @@ ebt_ref = "main"
 Если `.acceptbox.toml` уже закоммичен в `base`, из корня репозитория достаточно выполнить:
 
 ```sh
-acceptbox accept --base <base_sha> --repro <repro_sha>
+acceptbox accept --base "$(git merge-base main HEAD)" --repro <repro_sha>
 ```
 
 Здесь `--repo` по умолчанию `.`, `--head` немедленно резолвится из `HEAD` текущего репозитория в полный SHA, а `--out` атомарно создаётся в `TMPDIR` (путь к `accept.json` печатается в итоговом сообщении).
+Учтите: незакоммиченные правки рабочего дерева не проверяются, а если `--repo` указан как URL, то без `--head` через `git ls-remote` берётся удалённый `HEAD` (ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно).
 
 Без `.acceptbox.toml` передайте `--tests` и команду после `--` явно:
 
 ```sh
 acceptbox accept \
-  --base <base_sha> \
+  --base "$(git merge-base main HEAD)" \
   --repro <repro_sha> \
   --tests tests/ \
   --protect pyproject.toml \
@@ -69,7 +71,7 @@ acceptbox accept \
 
 ## 4. Подключение режима `witnessbox` (EBT)
 
-1. Убедитесь, что каталог `ebt/` утверждён владельцем и находится в основной ветке репозитория (`kaufd/witnessbox`, версия `>=0.10.0`).
+1. Убедитесь, что в окружении установлен CLI [WitnessBox](https://github.com/kaufd/witnessbox) (`kaufd/witnessbox`, версия `>=0.10.0`), а каталог `ebt/` вашего проекта утверждён владельцем и находится в основной ветке проверяемого репозитория.
 2. Зафиксируйте отпечаток утверждённого дерева `ebt/` (в `pin` флаг `--ebt-repo` обязателен):
    ```sh
    APPROVED_TREE=$(acceptbox pin --ebt-repo /path/to/project --ebt-sha <ebt_sha>)
@@ -89,7 +91,7 @@ acceptbox accept \
 
 ## 5. Калибровка чувствительности (`calibrate`)
 
-Для проверки эталонных коммитов и мутантов (без проверки ancestry и без создания `accept.json`) используйте `acceptbox calibrate`:
+Для проверки эталонных коммитов и мутантов (без проверки `ancestry`, `--protect` и диффа и без создания `accept.json`) используйте `acceptbox calibrate`:
 
 ```sh
 acceptbox calibrate \

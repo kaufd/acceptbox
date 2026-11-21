@@ -31,7 +31,7 @@ acceptbox --installation
 
 Выводит JSON формата `1` (`format`, `report_format`, `distribution`, `version`, блоки `git` и `witnessbox` с `supported: ">=0.10.0"`). Возвращает код `0`, если доступны `git` и `acceptbox`, независимо от того, установлен ли `witnessbox`; код `2` — только при отсутствии/сбое `git` или ошибке диагностики `acceptbox`.
 
-## Проектный конфиг (`.acceptbox.toml`, L23, L25)
+## Проектный конфиг (`.acceptbox.toml`, L23, L25, L26)
 
 Чтобы не повторять параметры проекта при каждом запуске, добавьте в корень репозитория `.acceptbox.toml`:
 
@@ -40,7 +40,7 @@ format = 1
 mode = "command"               # опционально: "command" | "witnessbox" (по умолчанию "command")
 timeout = 600                  # опционально: положительное число секунд
 protect = ["pyproject.toml"]   # опционально: объединяется с --protect из CLI
-env = ["PYTHONPATH=src"]       # опционально: KEY или KEY=VAL (BASE, EBT_*, GIT_* запрещены)
+env = ["PYTHONPATH=src"]       # опционально: KEY или KEY=VAL (BASE, EBT_* и git local-env-vars запрещены)
 
 [command]
 tests = ["tests/"]
@@ -54,7 +54,9 @@ ebt_ref = "main"
 **Правила доверия (fail-closed):**
 - `.acceptbox.toml` читается строго из объектов Git базового коммита `base` (в `calibrate` — только при переданном `--base`), а не из рабочего дерева или веток `repro`/`head`;
 - `.acceptbox.toml` автоматически защищается от изменений, удаления и переименования в `base..repro` и `base..head` (как `--protect`);
-- все присутствующие секции валидируются строго: неизвестные ключи, пер-задачные поля (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`), симлинки и ошибки TOML завершаются с `ERROR` (`config-invalid`, код `2`);
+- **граница доверия `--base` (L26):** конфигу можно доверять ровно настолько, насколько можно доверять `--base`. AcceptBox не проверяет принадлежность `--base` основной ветке — `--base` должна задавать принимающая сторона (человек, CI или внешний оркестратор, например через `git merge-base main HEAD`), а не проверяемый агент;
+- все присутствующие секции валидируются строго: неизвестные ключи, пер-задачные поля (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`), симлинки и ошибки TOML завершаются с `ERROR` (`config-invalid`, код `2`);
+- `env` допускает обычные переменные (включая `GIT_SSH_COMMAND` или `GIT_AUTHOR_NAME`), но запрещает `BASE`, любые `EBT_*` и переменные git-изоляции из `git rev-parse --local-env-vars`;
 - `protect` из конфига и CLI суммируются (CLI не может ослабить защиту из `base`), `env` сливается с приоритетом CLI по ключу, остальные параметры переопределяются явными флагами CLI.
 
 ## Фиксация дерева проверок (`pin`)
@@ -70,7 +72,7 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 Эргономичные значения по умолчанию (L22):
 - `--mode` по умолчанию берётся из `.acceptbox.toml` или равен `command`;
 - `--repo` по умолчанию `.`;
-- `--head` по умолчанию `HEAD` из `--repo` с немедленным резолвом в полный SHA при старте (явно переданный `--head` по-прежнему принимается только как полный 40/64-hex SHA);
+- `--head` по умолчанию `HEAD` из `--repo` с немедленным резолвом в полный SHA при старте (явно переданный `--head` по-прежнему принимается только как полный 40/64-hex SHA). **Важно:** незакоммиченные правки рабочего дерева не проверяются, а если `--repo` указан как URL, через `git ls-remote` берётся удалённый `HEAD` (обычно ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно);
 - `--ebt-repo` в `witnessbox` по умолчанию берётся из `.acceptbox.toml` или равен `--repo`;
 - `--out` по умолчанию атомарно создаётся как новый пустой каталог в системном `TMPDIR`, а путь к `accept.json` выводится в итоговое сообщение.
 
@@ -79,7 +81,7 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 Минимальный запуск (при наличии `.acceptbox.toml` в `base`, из корня репозитория):
 
 ```sh
-acceptbox accept --base <40-hex-sha> --repro <40-hex-sha>
+acceptbox accept --base "$(git merge-base main HEAD)" --repro <40-hex-sha>
 ```
 
 Полный запуск с явными флагами (без `.acceptbox.toml`):
@@ -123,22 +125,50 @@ acceptbox accept \
 
 ## Калибровка чувствительности (`calibrate`)
 
+Режим `command`:
+
 ```sh
 acceptbox calibrate \
   --green <sha> \
   --red <sha> \
+  [--repo /path/to/project] \
   [--base <base_sha>] \
+  [--timeout 600] \
+  [--env KEY[=VAL] ...] \
   [--out /tmp/calibrate-run] \
   -- python3 -m unittest discover -s tests
 ```
 
-Проверяет набор `--green` / `--red` коммитов без проверки ancestry и записывает `<out>/calibrate.json` (`accept.json` не создаётся). Если передан `--base`, настройки могут подгружаться из `.acceptbox.toml` этого коммита.
+Режим `witnessbox`:
+
+```sh
+acceptbox calibrate \
+  --mode witnessbox \
+  --green <sha> \
+  --red <sha> \
+  --inv INV-1 \
+  --ebt-ref main \
+  --ebt-sha <40-hex-sha> \
+  --approved-tree <64-hex-sha256> \
+  [--repo /path/to/project] \
+  [--ebt-repo /path/to/ebt-repo] \
+  [--base <base_sha>] \
+  [--timeout 600] \
+  [--env KEY[=VAL] ...] \
+  [--out /tmp/calibrate-ebt-run]
+```
+
+Калибровка проверяет набор `--green` / `--red` коммитов и записывает `<out>/calibrate.json` (`accept.json` не создаётся). Проверки `ancestry`, `--protect` и диффа `base..repro` / `repro..head` в калибровке **не применяются**. Если передан `--base`, настройки могут подгружаться из `.acceptbox.toml` этого коммита (и в `witnessbox` передаётся `BASE`).
 
 ## Коды выхода и отчёты
 
 - `0` — `ACCEPTED` (для `accept`) / `CALIBRATED` (для `calibrate`);
 - `1` — `REJECTED` / `FAILED` (отказ по правилам приёмки или калибровки);
 - `2` — `ERROR` (ошибка аргументов CLI, непустой `--out`, некорректный `.acceptbox.toml` `config-invalid`, сбой `git`, отсутствующий/несовместимый `witnessbox`, нарушение схемы отчёта, ошибка прогона `gate-error`).
+
+**Правило записи отчёта при коде `2` (L26):**
+- `accept.json` / `calibrate.json` **не создаётся** при ошибках синтаксиса CLI, при `out-not-empty`, а также при нехватке обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или смешивании флагов режимов, обнаруженных после чтения `base:.acceptbox.toml`; если пустой каталог `--out` был создан текущим запуском, он удаляется;
+- во всех остальных случаях кода `2` после захвата `--out` (включая `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, `gate-error`) отчёт записывается атомарно, а путь к нему печатается в `stderr`.
 
 Подробнее о подключении проекта см. [docs/onboarding.md](docs/onboarding.md) и журнал решений [docs/decisions.md](docs/decisions.md).
 
