@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,21 +35,23 @@ _VALID_MODES = frozenset({"command", "witnessbox"})
 
 
 class ConfigError(ValueError):
-    """Некорректный .acceptbox.toml в базовом коммите → config-invalid (код 2).
+    """Некорректный конфиг (.acceptbox.toml или --config) → config-invalid (код 2).
 
-    ``commit`` и ``sha256`` заполняет load_config_from_commit для отчёта.
+    ``commit``, ``path`` и ``sha256`` заполняются загрузчиком для отчёта.
     """
 
     commit: str | None = None
+    path: str | None = None
     sha256: str | None = None
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    """Разобранный и провалидированный .acceptbox.toml из коммита base."""
+    """Разобранный и провалидированный конфиг из коммита base или внешнего --config."""
 
-    source_commit: str
+    source_commit: str | None
     sha256: str
+    source_path: str = CONFIG_FILENAME
     mode: str | None = None
     timeout: float | None = None
     protect: tuple[str, ...] = ()
@@ -74,7 +77,8 @@ def _require_str_list(value: object, *, label: str, allow_empty: bool = True) ->
     return value
 
 
-def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
+def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
+                 source_path: str = CONFIG_FILENAME) -> ProjectConfig:
     """Разобрать и провалидировать содержимое .acceptbox.toml (fail-closed)."""
     sha256 = hashlib.sha256(raw_bytes).hexdigest()
     try:
@@ -199,6 +203,7 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
     return ProjectConfig(
         source_commit=commit_sha,
         sha256=sha256,
+        source_path=source_path,
         mode=mode,
         timeout=timeout,
         protect=tuple(protect),
@@ -208,6 +213,43 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
         witnessbox_ebt_repo=wb_ebt_repo,
         witnessbox_ebt_ref=wb_ebt_ref,
     )
+
+
+def load_config_from_file(config_path: Path) -> ProjectConfig:
+    """Прочитать внешний конфиг ``--config <path>`` с диска (fail-closed, L30).
+
+    Отклоняет отсутствующий путь, симлинки, не-обычные файлы и ошибки схемы → ConfigError.
+    O_NOFOLLOW и fstat по открытому дескриптору: без гонки между проверкой и чтением;
+    O_NONBLOCK — чтобы FIFO не подвесил открытие.
+    """
+    path_str = os.path.abspath(os.path.expanduser(str(config_path)))
+
+    def reject(message: str) -> ConfigError:
+        error = ConfigError(f"--config {path_str}: {message}")
+        error.path = path_str
+        return error
+
+    try:
+        descriptor = os.open(path_str, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as missing:
+        raise reject("файл не найден") from missing
+    except OSError as io_error:
+        if os.path.islink(path_str):
+            raise reject("симлинк не допускается") from io_error
+        raise reject(f"не удалось открыть файл: {io_error}") from io_error
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise reject("должен быть обычным файлом")
+        try:
+            raw = handle.read()
+        except OSError as io_error:
+            raise reject(f"не удалось прочитать файл: {io_error}") from io_error
+    try:
+        return parse_config(raw, commit_sha=None, source_path=path_str)
+    except ConfigError as error:
+        error.path = path_str
+        error.sha256 = hashlib.sha256(raw).hexdigest()
+        raise
 
 
 def load_config_from_commit(repo: Path, env: dict[str, str],

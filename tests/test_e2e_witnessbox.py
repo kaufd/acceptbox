@@ -321,6 +321,34 @@ class E2EWitnessboxReal(unittest.TestCase):
                 self.assertEqual(item["artifacts"]["gate.json"]["sha256"],
                                  hashlib.sha256(gate_file.read_bytes()).hexdigest())
 
+    # ── 5. Авто-резолв локального one-liner без --base/--repro/--inv/--ebt-sha ──
+
+    def test_accept_one_liner_without_inv_or_explicit_shas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            # В фикстуре main стоит на self.base, а ветка fix — на self.head.
+            _git(self.repo, "checkout", "-q", "-b", "fix-oneliner", self.head)
+            _git(self.repo, "update-ref", "refs/heads/main", self.base)
+            try:
+                proc = _run_cli([
+                    "accept", "--mode", "witnessbox", "--repo", str(self.repo),
+                    "--base-ref", "main", "--ebt-ref", "main", "--pin-from-ref",
+                    "--out", str(out),
+                ])
+                message = f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+                self.assertEqual(proc.returncode, 0, message)
+                data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+                self.assertEqual(data["result"], "ACCEPTED")
+                self.assertEqual(data["repo"]["base"], self.base)
+                self.assertEqual(data["repo"]["repro"], self.repro)
+                self.assertEqual(data["repo"]["head"], self.head)
+                self.assertEqual(data["coverage"]["checked"], ["INV-1"])
+                self.assertTrue(data["inputs"]["ebt"]["pinned_from_ref"])
+            finally:
+                _git(self.repo, "checkout", "-q", "main")
+                _git(self.repo, "update-ref", "refs/heads/main", self.head)
+                _git(self.repo, "branch", "-q", "-D", "fix-oneliner")
+
 
 if __name__ == "__main__":
     unittest.main()

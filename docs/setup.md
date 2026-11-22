@@ -205,7 +205,7 @@ argv = ["./scripts/acceptbox-test.sh"]
 ebt_ref = "main"
 ```
 
-Run `acceptbox accept ...` for everyday bugfixes in `command` mode, or pass `--mode witnessbox --inv INV-1 --ebt-sha <sha> --approved-tree <sha256>` when accepting against human-approved EBT invariants.
+Run `acceptbox accept --base-ref main` for everyday bugfixes in `command` mode (or `--policy refactor` for refactorings), or run `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref` when accepting against human-approved EBT invariants.
 
 ## Wrapper script contract
 
@@ -235,10 +235,10 @@ worktrees. The rules below apply to every coding agent working in this repositor
 
 ## Hard rules
 
-1. **Know when AcceptBox applies.** Use the `base → repro → head` chain for **bugfixes** (and for
-   human-approved invariants in `--mode witnessbox`). Do not fabricate a fake `repro` test for a
-   brand-new feature without a human-approved specification, and do not force pure refactors into
-   `base → repro → head`.
+1. **Know when AcceptBox applies.** Use `base → repro → head` (`--policy bugfix`) for **bugfixes**
+   (and human-approved invariants in `--mode witnessbox`). Use `--policy refactor` (`base` green →
+   `head` green, tests untouched) for **refactorings**. Do not fabricate a fake `repro` test for a
+   brand-new feature without a human-approved specification.
 2. **Strict two-commit bugfix structure (`base → repro → head`):**
    - Start from a clean commit `base` on the base branch (e.g. `main`).
    - **Commit 1 (`repro`):** modify **only** test files matching `[command].tests` in
@@ -266,13 +266,17 @@ worktrees. The rules below apply to every coding agent working in this repositor
 
 ## Local self-check command
 
-Run from the repository root after committing `repro` and `head` (uncommitted edits are ignored):
+Run from the repository root after committing (uncommitted edits are ignored):
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro <repro_sha>
+# Bugfix (command mode):
+acceptbox accept --base-ref main
+
+# Refactoring (command mode):
+acceptbox accept --policy refactor --base-ref main
+
+# WitnessBox mode (optional --inv, optional --policy refactor):
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 
 Note: local runs are a self-check; the authoritative verdict comes from a human or CI running

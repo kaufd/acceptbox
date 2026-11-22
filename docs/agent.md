@@ -44,7 +44,7 @@ Stop and ask the human instead of guessing when:
 ## Stage 0. Environment
 
 ```sh
-acceptbox --installation || uv tool install acceptbox==0.2.0
+acceptbox --installation || uv tool install acceptbox==0.3.0
 acceptbox --installation
 ```
 
@@ -143,7 +143,7 @@ Calibration: green=<BASE> (code 0), red=<temporary defect> (code 1) -> CALIBRATE
 Not covered / limits:
 - command mode verifies commit structure, test immutability, and exit codes, not semantic test quality;
 - local runs rely on .git/config origin; run AcceptBox in CI (or pass --repo URL) for full trust;
-- applies to bugfixes (and human-approved WitnessBox invariants), not unapproved new features or refactors.
+- applies to bugfixes (and human-approved WitnessBox invariants), not unapproved new features; refactors only via `--policy refactor`, which proves no regressions, not preserved behaviour.
 ```
 
 ---
@@ -154,9 +154,10 @@ Follow this playbook whenever you fix a bug in a repository that already has `.a
 
 ## 1. Check scope before writing code
 
-- **Bugfix?** Yes → use the `base → repro → head` workflow below.
+- **Bugfix?** Yes → use the `base → repro → head` workflow below (`--policy bugfix`, default).
+- **Refactoring (no behaviour change)?** Yes → use `--policy refactor` (`base` green → `head` green without a `repro` commit; do not modify tests or `ebt/`). Only for changes that truly keep behaviour: `ACCEPTED` here proves no regressions against existing checks, not preserved behaviour, so never use it to skip a `repro` for a bugfix or a feature.
 - **Task with human-approved WitnessBox invariants (`--mode witnessbox`)?** Yes → follow the `ebt/` rules too; never edit `ebt/` or `tool/ebt_check`.
-- **New feature without approved EBT spec, or pure refactor?** Do **not** fake a `repro` commit; follow the repository's normal feature/refactor workflow and note in the PR why `base → repro → head` was not used.
+- **New feature without approved EBT spec?** Do **not** fake a `repro` commit; follow the repository's normal feature workflow and note in the PR why `base → repro → head` was not used.
 
 ## 2. Inspect `.acceptbox.toml` first (read-only)
 
@@ -198,23 +199,17 @@ Remember: AcceptBox tests committed Git objects only — uncommitted working-tre
 `command` mode:
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO"
+acceptbox accept --base-ref main
 ```
 
-`witnessbox` mode (using `--ebt-sha` and `--approved-tree` provided by the human):
+*(For refactorings: `acceptbox accept --policy refactor --base-ref main`. If your branch has helper commits before the repro commit, add `AcceptBox-Role: repro` as a trailer in the repro commit message, or pass `--repro "$REPRO"` explicitly.)*
+
+Quote the `acceptbox:` summary line and any `acceptbox: внимание:` lines verbatim in your report or PR — that is what the human reads.
+
+`witnessbox` mode (either with `--pin-from-ref` locally, or explicit `--ebt-sha` / `--approved-tree`; `--inv` is optional and auto-inferred from `base` → `repro` when omitted):
 
 ```sh
-acceptbox accept \
-  --mode witnessbox \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO" \
-  --inv <INV-IDs> \
-  --ebt-sha <human-approved-ebt-sha> \
-  --approved-tree <human-approved-tree-sha256>
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 
 ## 5. Diagnosing results (`accept.json`)

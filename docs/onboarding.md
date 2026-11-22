@@ -6,16 +6,16 @@ AcceptBox verifies a commit chain `base → repro → head` in an isolated tempo
 
 For stack-specific `.acceptbox.toml` templates, wrapper scripts, and a ready-to-copy `AGENTS.md` rules snippet for your repository, see [Project setup & templates](setup.md). To let an AI coding agent wire up the project for you, point it to the [agent instructions](agent.md). For full flag and schema details, see the [CLI reference](usage.md).
 
-## 0. Applicability: when to use `command` vs `witnessbox` (L24)
+## 0. Applicability: when to use `command` vs `witnessbox` (L24, L30)
 
-- **Bugfixes (`--mode command` or `--mode witnessbox`):** the `base → repro → head` chain with a failing repro commit is specifically designed for bugfixes.
+- **Bugfixes (`--policy bugfix`, default, with `command` or `witnessbox`):** the `base → repro → head` chain with a failing repro commit is designed for bugfixes.
+- **Refactorings (`--policy refactor`, with `command` or `witnessbox`):** `base` green → `head` green without a `repro` commit, automatically protecting `.acceptbox.toml` and `[command].tests` (or `ebt/` and `tool/ebt_check` in `witnessbox` mode).
 - **New features:** a failing reproduction test written by the same model that writes the implementation does not give a strong guarantee (the model can fit the test and code to each other). For features, use a human-approved specification (`--mode witnessbox`, D4/L10) and/or independent review and behavioural checks.
-- **Refactorings:** a `base` green → `head` green policy with protected tests and no `repro` commit is orthogonal to `--mode` and remains a separate workflow.
 
 ## 1. Install and check the environment
 
 ```sh
-uv tool install acceptbox==0.2.0
+uv tool install acceptbox
 # Optional (only needed for --mode witnessbox):
 uv tool install 'witnessbox>=0.10.0'
 
@@ -55,10 +55,10 @@ In `command` mode (the default, L22), the `repro` commit adds a failing reproduc
 With `.acceptbox.toml` already committed in `base`, run from the repository root:
 
 ```sh
-acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <repro_sha>
+acceptbox accept --base-ref main
 ```
 
-Here `--repo` defaults to `.`, `--head` is immediately resolved from `HEAD` to a full SHA, and `--out` is atomically created in `TMPDIR` (the path to `accept.json` is printed in the summary).
+Here `--repo` defaults to `.`, `--head` resolves from `HEAD`, `--base` resolves to `merge-base main HEAD`, `--repro` resolves to the commit carrying `AcceptBox-Role: repro` (or the first commit in `base..HEAD`), and `--out` is atomically created in `TMPDIR` (the path to `accept.json` is printed in the summary). For a refactoring branch (`base` green → `head` green, tests protected), run `acceptbox accept --policy refactor --base-ref main`.
 Keep in mind: uncommitted working-tree changes are not tested, and if `--repo` is given as a URL without `--head`, `git ls-remote` resolves remote `HEAD` (usually the default branch, not your fix branch — pass `--head` explicitly for URLs).
 
 Without `.acceptbox.toml`, pass `--tests` and the test command after `--` explicitly:
@@ -66,8 +66,6 @@ Without `.acceptbox.toml`, pass `--tests` and the test command after `--` explic
 ```sh
 acceptbox accept \
   --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro <repro_sha> \
   --tests tests/ \
   --protect pyproject.toml \
   -- python3 -m unittest discover -s tests
@@ -77,24 +75,23 @@ acceptbox accept \
 
 ## 4. Connecting `witnessbox` mode (EBT)
 
-1. Ensure the [WitnessBox](https://github.com/kaufd/witnessbox) CLI (`kaufd/witnessbox`, version `>=0.10.0`) is installed and your project's human-approved `ebt/` directory is committed on the base branch.
-2. Pin the fingerprint of the approved `ebt/` tree (`--ebt-repo` is required for `pin`):
+1. Ensure the [WitnessBox](https://github.com/kaufd/witnessbox) CLI (`kaufd/witnessbox`, version `>=0.10.0`) is installed and your project's human-approved `ebt/` directory is committed on the base branch (`[witnessbox].ebt_ref = "main"` in `.acceptbox.toml`).
+2. **Quick local run** (pins `ebt/` from the tip of trusted `--ebt-ref` and auto-infers the violated invariant from `base` → `repro`):
+   ```sh
+   acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
+   ```
+   *(For refactorings: add `--policy refactor`. Add `--inv INV-1` if you want to restrict checking to specific invariant(s).)*
+3. **Explicit external pinning** (when an owner pins `ebt/` upfront via `acceptbox pin`):
    ```sh
    APPROVED_TREE=$(acceptbox pin --ebt-repo /path/to/project --ebt-sha <ebt_sha>)
-   ```
-3. Run acceptance (verifies `ebt/` trust, ancestry, protection of `.acceptbox.toml`, `ebt`, and `tool/ebt_check`, failing `base` and `repro` on `--inv`, and passing `head`):
-   ```sh
    acceptbox accept \
      --mode witnessbox \
      --base-ref main \
-     --base <base_sha> \
-     --repro <repro_sha> \
-     --inv INV-1 \
-     --ebt-ref main \
      --ebt-sha <ebt_sha> \
-     --approved-tree "$APPROVED_TREE"
+     --approved-tree "$APPROVED_TREE" \
+     [--inv INV-1]
    ```
-   `--repo` (defaults to `.`), `--ebt-repo` (defaults to `--repo`), `--head` (defaults to `HEAD`), and `--out` (defaults to a new directory in `TMPDIR`) are optional. If `mode = "witnessbox"` and `[witnessbox].ebt_ref` are set in `base:.acceptbox.toml`, you can omit `--mode` and `--ebt-ref` too. When `--ebt-repo` is a local path (the default), `--ebt-ref` is fetched from its `origin` remote; without `origin`, it falls back to the local branch with `ref_source_kind: "local"` in the report, leaving `--approved-tree` as the trust anchor.
+   `--repo` (defaults to `.`), `--ebt-repo` (defaults to `--repo`), `--head` (defaults to `HEAD`), `--base` (auto-resolved from `--base-ref`), `--repro` (auto-resolved from `base..HEAD`), `--inv` (auto-inferred from `base` → `repro`), and `--out` (new directory in `TMPDIR`) are all optional. When `--ebt-repo` is a local path (the default), `--ebt-ref` is fetched from its `origin` remote; without `origin`, it falls back to the local branch with `ref_source_kind: "local"` in the report (pass `--strict-refs` to forbid `"local"` fallback).
 
 ## 5. Sensitivity calibration (`calibrate`)
 

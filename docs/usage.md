@@ -14,7 +14,7 @@ Prints format-`1` JSON containing:
 - `format`: `1`
 - `report_format`: `1`
 - `distribution`: `"acceptbox"`
-- `version`: installed version (e.g. `"0.2.0"`)
+- `version`: installed version (e.g. `"0.3.0"`)
 - `git`: status (`"ok" | "missing" | "error"`), path, version
 - `witnessbox`: path, version, `supported: ">=0.10.0"`, status (`"compatible" | "missing" | "incompatible" | "error"`)
 
@@ -45,7 +45,7 @@ ebt_ref = "main"
 
 ### Trust, validation, and precedence rules (fail-closed)
 
-- **Read strictly from `base`:** `.acceptbox.toml` is read directly from Git objects of the `base` commit (`git ls-tree` + `git cat-file`), never from the working tree or from `repro`/`head`. In `calibrate`, it is read only when `--base` is passed.
+- **Read strictly from `base` (or external `--config`):** by default `.acceptbox.toml` is read directly from Git objects of the `base` commit (`git ls-tree` + `git cat-file`), never from the working tree or from `repro`/`head` (in `calibrate`, only when `--base` is passed). Alternatively, pass `--config <path>` (CLI-only, supported on `accept` and `calibrate`) to load the same format-`1` TOML schema from an external regular file outside the target repository without committing anything to `main` (missing files, symlinks, directories, and invalid TOML fail closed with `config-invalid`, exit `2`).
 - **Auto-protected:** `.acceptbox.toml` is automatically added to protected paths for `base..repro` and `base..head` (identical to `--protect .acceptbox.toml`).
 - **`--base` trust boundary:** the config is only as trustworthy as `--base`. Pass `--base-ref main` (CLI-only — `base_ref` is rejected inside `.acceptbox.toml`) so AcceptBox verifies `--base` is an ancestor of `main` from `origin` *before* loading `.acceptbox.toml`. Without `--base-ref`, the acceptor (human, CI, or external orchestrator) must provide `--base`.
 - **Strict schema validation:** all present sections are validated fail-closed. Unknown keys, per-task fields (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`, `base_ref`), relative local `[witnessbox].ebt_repo` paths, symlinks/directories instead of a regular file, and TOML syntax errors fail with `ERROR` (`config-invalid`, exit code `2`). In that report, `inputs.config` records the `commit` and `sha256` of the rejected file.
@@ -65,28 +65,53 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 
 ## Accepting a commit chain (`accept`)
 
-### Defaults
+### Defaults and local auto-resolution
 
 - `--mode`: from `.acceptbox.toml`, or `command`.
 - `--repo`: `.`.
+- `--base`: if omitted, requires `--base-ref <ref>` and automatically resolves `git merge-base <trusted ref> <head>` before loading `.acceptbox.toml` from that `base`.
+- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Only the commit's trailer block counts (parsed by `git`); a role line inside the message body is ignored. The `first-commit` fallback is announced by a CLI warning. Forbidden in `refactor` policy.
 - `--head`: `HEAD` of `--repo`, resolved to a full SHA immediately after checking `git` (failure produces `gate-error` with a report). An explicitly passed `--head` must be a full 40/64-hex SHA. **Note:** uncommitted working-tree edits are never tested; when `--repo` is a URL, omitting `--head` resolves remote `HEAD` via `git ls-remote` (usually the default branch, not a feature branch — pass `--head` explicitly for URLs).
 - `--ebt-repo` (`witnessbox` mode): from `[witnessbox].ebt_repo`, or `--repo`.
+- `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and reads the `ebt/` tree directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`). The tree is pinned, not owner-approved: the report records `approved_tree_sha256: null` with `pinned_from_ref: true` (the hash is in `actual_tree_sha256`), and the CLI prints a warning.
+- `--inv` (`witnessbox` mode): optional. When omitted, runs the full `ebt/spec.toml` suite: in `bugfix` policy, any violated invariant (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) on `base` is inferred automatically and `repro` must fail on at least one of those same invariants before `head` passes; in `refactor` policy, all invariants must pass on both `base` and `head`. Passing an explicit empty `--inv ""` still rejects with `no-invariants`.
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
 
-### Trusted ref source (`--base-ref` and `--ebt-ref`)
+### Trusted ref source (`--base-ref`, `--ebt-ref`, and `--strict-refs`)
 
 - If the repository argument (`--repo` for `--base-ref`, `--ebt-repo` for `--ebt-ref`) is a URL or scp-like remote, the ref is fetched directly from it (`ref_source_kind: "remote"`).
 - If it is a local path, AcceptBox queries `git remote get-url origin` and fetches the ref from `origin` (`ref_source_kind: "origin"`), so an agent moving local branches cannot forge ancestry. Short ref names resolve `refs/heads/<ref>` first, then `refs/tags/<ref>`.
-- If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
+- If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Pass `--strict-refs` (CLI-only, recommended in CI) to reject `"local"` fallback fail-closed with `ref-source-local` (exit code `1`). In `command` mode, `--strict-refs` requires `--base-ref`. Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
 - **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI) / pass URLs for `--repo` and `--ebt-repo`.
+
+### Policies (`--policy bugfix` vs `--policy refactor`)
+
+- **`--policy bugfix` (default, CLI-only):** verifies `base → repro → head` (`--repro` is auto-resolved from `base..head` if omitted; `repro` red, `head` green; in `witnessbox` mode `base` must also be red and `repro` must fail on the same invariant(s)).
+- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`). **`ACCEPTED` under `refactor` means no regressions against the existing checks; behaviour preservation is not verified** — the verdict message says so itself. In `witnessbox` mode `coverage.checked` lists every invariant in scope (`--inv`, or all `[inv.*]` of `ebt/spec.toml`); a spec without invariants is `inputs-untrusted`.
+
+```sh
+acceptbox accept --policy refactor --base-ref main
+```
+
+### CLI output
+
+The summary line is what a human actually reads, so everything that changes the meaning of the verdict is printed there, not only in `accept.json` (L31):
+
+```text
+acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим проверкам нет; сохранение поведения не проверяется (policy=refactor) (отчёт: /tmp/.../accept.json)
+acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref 'main' (1a2b3c4d5e6f), а не по одобренному --approved-tree (--pin-from-ref)
+```
+
+- `[policy=…]` is always printed after the result.
+- `acceptbox: внимание: …` lines follow for: `--pin-from-ref` (pinned, not approved `ebt/`), `ref_source_kind: "local"` for `--base-ref` / `--ebt-ref` (weak check), and an auto-picked `first-commit` repro. The same texts are stored in `accept.json` → `warnings`.
 
 ### `command` mode
 
 Minimal invocation (with `.acceptbox.toml` committed in `base`):
 
 ```sh
-acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <full-sha>
+acceptbox accept --base-ref main
 ```
 
 Explicit invocation (without `.acceptbox.toml`):
@@ -111,16 +136,25 @@ The command after `--` (or `[command].argv`) runs with `shell=False` in a dedica
 
 ### `witnessbox` mode
 
+Minimal local invocation (with `[witnessbox].ebt_ref = "main"` in `.acceptbox.toml`):
+
+```sh
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
+```
+
+Explicit pinned invocation:
+
 ```sh
 acceptbox accept \
   --mode witnessbox \
   --base <full-sha> \
   --repro <full-sha> \
-  --inv INV-1,INV-2 \
   --ebt-ref main \
   --ebt-sha <full-sha> \
   --approved-tree <64-hex-sha256> \
+  [--inv INV-1,INV-2] \
   [--base-ref main] \
+  [--strict-refs] \
   [--repo /path/to/project] \
   [--head <full-sha>] \
   [--ebt-repo /path/to/ebt-repo] \
@@ -130,7 +164,7 @@ acceptbox accept \
   [--out /tmp/accept-ebt-run]
 ```
 
-In `witnessbox` mode, `ebt` and `tool/ebt_check` are always added to protected paths, `base` and `repro` must both be `red` with `FALSE_PROOF` or `CONFIRMED_VIOLATION` on at least one invariant from `--inv`, and `head` must be `green`.
+In `witnessbox` mode, `ebt` and `tool/ebt_check` are always added to protected paths. In `bugfix` policy, `base` and `repro` must both be `red` with `FALSE_PROOF` or `CONFIRMED_VIOLATION` on at least one target invariant (from `--inv`, or inferred from `base` when `--inv` is omitted), and `head` must be `green`.
 
 ## Sensitivity calibration (`calibrate`)
 
@@ -182,22 +216,27 @@ acceptbox calibrate \
 | Reason code | Mode / command | Meaning |
 |---|---|---|
 | `base-not-on-ref` | `accept` (with `--base-ref`) | `--base-ref` was not found in the trusted source or `--base` is not its ancestor |
+| `ref-source-local` | `accept` (with `--strict-refs`) | Trusted ref source degraded to `"local"` while `--strict-refs` was enabled |
 | `no-invariants` | `witnessbox` | `--inv` contained no invariants |
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` missing, `--ebt-sha` not ancestor of `--ebt-ref`, `ebt/` hash ≠ `--approved-tree`, or `ebt/spec.toml` missing |
-| `repro-not-descendant` | `accept` | `base` is not an ancestor of `repro` |
-| `repro-not-ancestor` | `accept` | `repro` is not an ancestor of `head` |
-| `protected-paths-changed` | `accept` | A protected path (including `.acceptbox.toml`, or `ebt`/`tool/ebt_check` in `witnessbox` mode) changed in `base..repro` or `base..head` |
-| `repro-empty` | `accept` (`command`) | `base..repro` diff is empty |
-| `repro-outside-tests` | `accept` (`command`) | `base..repro` modified files outside `--tests` |
-| `repro-tests-modified` | `accept` (`command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |
-| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`witnessbox`) | `base` did not fail for the expected invariant |
-| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` | `repro` passed or failed for the wrong reason |
+| `repro-not-descendant` | `accept` (`bugfix`) | `base` is not an ancestor of `repro` |
+| `repro-not-ancestor` | `accept` (`bugfix`) | `repro` is not an ancestor of `head` |
+| `head-not-descendant` | `accept` (`refactor`; `bugfix` with auto-resolved `--repro`) | `base` is not an ancestor of `head` |
+| `protected-paths-changed` | `accept` | A protected path (`.acceptbox.toml`, `protect`, `[command].tests` in `refactor`, or `ebt`/`tool/ebt_check` in `witnessbox`) changed |
+| `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty (or no commits in `base..head` on auto-resolve) |
+| `repro-ambiguous` | `accept` (`bugfix`, auto-repro) | Multiple commits in `base..head` carry `AcceptBox-Role: repro` |
+| `refactor-empty` | `accept` (`refactor`) | `base..head` diff is empty |
+| `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` modified files outside `--tests` |
+| `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |
+| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`bugfix` + `witnessbox`) | `base` did not fail for the expected invariant |
+| `base-not-green` | `accept` (`refactor`) | `base` did not pass (`green`) |
+| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` (`bugfix`) | `repro` passed or failed for the wrong reason |
 | `head-not-green` | `accept` | `head` did not pass |
 | `mismatch` | `calibrate` | At least one `--green` / `--red` commit did not match its expected status |
 
 ### `ERROR` reason codes (exit code `2`) and report-writing rule
 
-- **No report written:** CLI syntax errors, `out-not-empty`, and missing required arguments (`--tests`, command after `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) or cross-mode flag mixing discovered after reading `base:.acceptbox.toml`. If the current invocation created an empty `--out` directory, it is removed.
+- **No report written:** CLI syntax errors, `out-not-empty`, and missing required arguments (`--tests`, command after `--`, `--ebt-ref`, `--ebt-sha` / `--approved-tree` without `--pin-from-ref`) or cross-mode flag mixing discovered after reading `base:.acceptbox.toml`. If the current invocation created an empty `--out` directory, it is removed.
 - **Report written atomically** (and its path printed to `stderr`) for all other exit-code-`2` errors after acquiring `--out`: `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, and `gate-error`.
 
 ## Development, building, and releasing

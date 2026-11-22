@@ -6,16 +6,16 @@ AcceptBox проверяет цепочку коммитов `base → repro →
 
 Готовые шаблоны `.acceptbox.toml` по стекам, скрипты-обёртки и шаблон правил `AGENTS.md` для вашего репозитория собраны в [Настройке проекта и шаблонах](setup.ru.md). Чтобы подключить проект силами ИИ-агента, передайте ему [инструкцию для агента](agent.ru.md). Полный список флагов и схему отчётов см. в [справочнике CLI](usage.ru.md).
 
-## 0. Область применимости: когда использовать `command`, а когда `witnessbox` (L24)
+## 0. Область применимости: когда использовать `command`, а когда `witnessbox` (L24, L30)
 
-- **Багфиксы (`--mode command` или `--mode witnessbox`):** цепочка `base → repro → head` с красным репро-коммитом предназначена именно для багфиксов.
+- **Багфиксы (`--policy bugfix`, по умолчанию, в `command` или `witnessbox`):** цепочка `base → repro → head` с красным репро-коммитом предназначена для багфиксов.
+- **Рефакторинги (`--policy refactor`, в `command` или `witnessbox`):** `base` зелёный → `head` зелёный без репро-коммита, с автоматической защитой `.acceptbox.toml` и `[command].tests` (или `ebt/` и `tool/ebt_check` в режиме `witnessbox`).
 - **Новые фичи:** красный репро-тест, написанный той же моделью, что и реализация, не даёт полезной гарантии (модель может подогнать тест и код друг под друга). Для фич используйте утверждённую человеком спецификацию (`--mode witnessbox`, D4/L10) и/или независимое ревью и проверку поведения.
-- **Рефакторинги:** политика `base` зелёный → `head` зелёный с защитой тестов без `repro` ортогональна `--mode` и является отдельной задачей.
 
 ## 1. Установка и проверка окружения
 
 ```sh
-uv tool install acceptbox==0.2.0
+uv tool install acceptbox
 # Опционально (нужно только для --mode witnessbox):
 uv tool install 'witnessbox>=0.10.0'
 
@@ -55,10 +55,10 @@ ebt_ref = "main"
 Если `.acceptbox.toml` уже закоммичен в `base`, из корня репозитория достаточно выполнить:
 
 ```sh
-acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <repro_sha>
+acceptbox accept --base-ref main
 ```
 
-Здесь `--repo` по умолчанию `.`, `--head` немедленно резолвится из `HEAD` текущего репозитория в полный SHA, а `--out` атомарно создаётся в `TMPDIR` (путь к `accept.json` печатается в итоговом сообщении).
+Здесь `--repo` по умолчанию `.`, `--head` резолвится из `HEAD`, `--base` вычисляется как `merge-base main HEAD`, `--repro` выбирается по trailer `AcceptBox-Role: repro` (или как первый коммит в `base..HEAD`), а `--out` атомарно создаётся в `TMPDIR` (путь к `accept.json` печатается в итоговом сообщении). Для ветки рефакторинга (`base` зелёный → `head` зелёный, тесты защищены) выполните `acceptbox accept --policy refactor --base-ref main`.
 Учтите: незакоммиченные правки рабочего дерева не проверяются, а если `--repo` указан как URL, то без `--head` через `git ls-remote` берётся удалённый `HEAD` (ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно).
 
 Без `.acceptbox.toml` передайте `--tests` и команду после `--` явно:
@@ -66,8 +66,6 @@ acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <r
 ```sh
 acceptbox accept \
   --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro <repro_sha> \
   --tests tests/ \
   --protect pyproject.toml \
   -- python3 -m unittest discover -s tests
@@ -77,24 +75,23 @@ acceptbox accept \
 
 ## 4. Подключение режима `witnessbox` (EBT)
 
-1. Убедитесь, что в окружении установлен CLI [WitnessBox](https://github.com/kaufd/witnessbox) (`kaufd/witnessbox`, версия `>=0.10.0`), а каталог `ebt/` вашего проекта утверждён владельцем и находится в основной ветке проверяемого репозитория.
-2. Зафиксируйте отпечаток утверждённого дерева `ebt/` (в `pin` флаг `--ebt-repo` обязателен):
+1. Убедитесь, что в окружении установлен CLI [WitnessBox](https://github.com/kaufd/witnessbox) (`kaufd/witnessbox`, версия `>=0.10.0`), а утверждённый каталог `ebt/` закоммичен в базовой ветке (`[witnessbox].ebt_ref = "main"` в `.acceptbox.toml`).
+2. **Быстрый локальный запуск** (берёт `ebt/` с вершины доверенной `--ebt-ref` и сам определяет нарушенный инвариант по `base` → `repro`):
+   ```sh
+   acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
+   ```
+   *(Для рефакторингов добавьте `--policy refactor`. Чтобы сузить проверку до конкретных инвариантов, передайте `--inv INV-1`.)*
+3. **Явная внешняя фиксация** (когда владелец заранее фиксирует `ebt/` через `acceptbox pin`):
    ```sh
    APPROVED_TREE=$(acceptbox pin --ebt-repo /path/to/project --ebt-sha <ebt_sha>)
-   ```
-3. Запустите приёмку (проверяются доверие `ebt/`, ancestry, защита `.acceptbox.toml`, `ebt` и `tool/ebt_check`, красные `base` и `repro` по `--inv`, и зелёный `head`):
-   ```sh
    acceptbox accept \
      --mode witnessbox \
      --base-ref main \
-     --base <base_sha> \
-     --repro <repro_sha> \
-     --inv INV-1 \
-     --ebt-ref main \
      --ebt-sha <ebt_sha> \
-     --approved-tree "$APPROVED_TREE"
+     --approved-tree "$APPROVED_TREE" \
+     [--inv INV-1]
    ```
-   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`) и `--out` (по умолчанию каталог в `TMPDIR`) опциональны. Если `mode = "witnessbox"` и `[witnessbox].ebt_ref` заданы в `.acceptbox.toml` в `base`, можно опустить и `--mode`, и `--ebt-ref`. Если `--ebt-repo` — локальный путь (по умолчанию), ветка `--ebt-ref` берётся из его remote `origin`; без `origin` — из локальной ветки с пометкой `ref_source_kind: "local"` в отчёте, и тогда опорой доверия остаётся только `--approved-tree`.
+   Флаги `--repo` (по умолчанию `.`), `--ebt-repo` (по умолчанию `--repo`), `--head` (по умолчанию `HEAD`), `--base` (авто-резолв от `--base-ref`), `--repro` (авто-резолв в `base..HEAD`), `--inv` (автоопределение по `base` → `repro`) и `--out` (каталог в `TMPDIR`) опциональны. Если `--ebt-repo` — локальный путь, ветка `--ebt-ref` берётся из его remote `origin`; без `origin` — из локальной ветки с пометкой `ref_source_kind: "local"` в отчёте (передайте `--strict-refs`, чтобы запретить запасной путь `"local"`).
 
 ## 5. Калибровка чувствительности (`calibrate`)
 
