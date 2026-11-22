@@ -200,9 +200,25 @@ acceptbox calibrate \
 - **Отчёт не создаётся:** ошибки синтаксиса CLI, `out-not-empty`, а также нехватка обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или смешивание флагов режимов, обнаруженные после чтения `base:.acceptbox.toml`. Если пустой каталог `--out` был создан текущим запуском, он удаляется.
 - **Отчёт записывается атомарно** (путь печатается в `stderr`) во всех остальных случаях кода `2` после захвата `--out`: `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, `gate-error`.
 
-## Разработка и сборка
+## Разработка, сборка и выпуск релиза
 
 ```sh
 python3 -m unittest discover -s tests
-uv build
+python3 tests/release_check.py
 ```
+
+`tests/release_check.py` собирает sdist и wheel из него, проверяет отсутствие сторонних runtime-импортов и совпадение версий, прогоняет весь набор тестов из распакованного sdist (без пропусков), сверяет побайтовую идентичность пересобранного wheel, проверяет установленный wheel в чистом venv и записывает `build/release/<version>/release.json` и `SHA256SUMS`.
+
+### Выпуск релиза (GitHub Actions)
+
+1. Обновите `version` в `pyproject.toml` и запасное значение `__version__` в `src/acceptbox/__init__.py`, влейте в `main`.
+2. Поставьте и отправьте тег: `git tag -a v<version> -m "AcceptBox <version>" && git push origin v<version>`.
+   Workflow [Release](../.github/workflows/release.yml) выполнит `tests/release_check.py` и создаст GitHub **prerelease** с прикреплёнными wheel, sdist, `release.json` и `SHA256SUMS` (при необходимости его можно запустить вручную: `gh workflow run release.yml -f tag=v<version>`).
+3. Опубликуйте проверенные артефакты на PyPI (Trusted Publishing по OIDC; workflow ничего не собирает, а сверяет SHA-256 с `release.json`):
+   ```sh
+   gh workflow run publish.yml -f tag=v<version>
+   ```
+4. Проверьте установку с PyPI (`uv tool install acceptbox==<version> && acceptbox --installation`) и переведите GitHub Release из prerelease в стабильный:
+   ```sh
+   gh release edit v<version> --prerelease=false --latest
+   ```
