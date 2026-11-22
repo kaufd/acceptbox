@@ -72,6 +72,13 @@ AcceptBox prints the verdict and the path to `accept.json` (created atomically i
 - Exit code `1` — **`REJECTED`** (acceptance rule failed: e.g., `base-not-on-ref`, `repro-outside-tests`, `repro-tests-modified`, `protected-paths-changed`, `repro-green`, `head-not-green`).
 - Exit code `2` — **`ERROR`** (CLI/config/environment/git error or test runner failure with exit code `>= 2`).
 
+To turn `accept.json` (or `calibrate.json`) into a human-readable Markdown summary or self-contained HTML5 report:
+
+```sh
+acceptbox render /path/to/accept.json --format md
+acceptbox render /path/to/accept.json --format html --out report.html
+```
+
 > **Using an AI coding agent?** Point it to the [agent instructions](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) to set up `.acceptbox.toml`, test wrappers, and ongoing project agent rules automatically — with explicit human-approval stop points.
 
 ## When to use AcceptBox (and when not to)
@@ -96,8 +103,8 @@ AcceptBox enforces commit structure, file immutability, and clean-worktree execu
 - [Quick start & onboarding](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) — step-by-step walkthrough for `command` mode, `witnessbox` mode, and `calibrate`.
 - [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
 - [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.
-- [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
-- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L30`).
+- [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `render`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
+- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L32`).
 
 Documentation is available in English and Russian; every page links to its translation.
 

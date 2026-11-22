@@ -72,6 +72,13 @@ AcceptBox напечатает вердикт и путь к `accept.json` (со
 - Код `1` — **`REJECTED`** (нарушено правило приёмки: например, `base-not-on-ref`, `repro-outside-tests`, `repro-tests-modified`, `protected-paths-changed`, `repro-green`, `head-not-green`).
 - Код `2` — **`ERROR`** (ошибка CLI/конфига/окружения/git или сбой запуска тестов с кодом `>= 2`).
 
+Чтобы получить читаемую сводку в Markdown или автономный HTML5-отчёт из `accept.json` (или `calibrate.json`):
+
+```sh
+acceptbox render /path/to/accept.json --format md
+acceptbox render /path/to/accept.json --format html --out report.html
+```
+
 > **Подключаете с помощью ИИ-агента?** Дайте ему [инструкцию для агента](docs/agent.ru.md) — он сам подготовит `.acceptbox.toml`, обёртку тестов и правила для агентов проекта, остановившись в нужных точках для утверждения человеком.
 
 ## Когда использовать AcceptBox (и когда не стоит)
@@ -96,8 +103,8 @@ AcceptBox проверяет структуру коммитов, неизмен
 - [Быстрый старт и подключение](docs/onboarding.ru.md) — пошаговое руководство по режимам `command`, `witnessbox` и калибровке `calibrate`.
 - [Настройка проекта и шаблоны](docs/setup.ru.md) — рецепты `.acceptbox.toml` по стекам, контракт скрипта-обёртки для чистого worktree и готовый шаблон правил `AGENTS.md` для подключённого проекта.
 - [Инструкция для агента-кодировщика](docs/agent.ru.md) — руководство для ИИ-агентов: подключение AcceptBox к репозиторию (с точками остановки для человека) и дальнейшая работа над багфиксами.
-- [Справочник CLI и конфигурации](docs/usage.ru.md) — полный справочник по `accept`, `calibrate`, `pin`, `--installation`, `.acceptbox.toml`, кодам выхода, кодам причин и правилам записи отчётов.
-- [Журнал решений](docs/decisions.ru.md) — журнал архитектурных решений в режиме append-only (`L8`–`L30`).
+- [Справочник CLI и конфигурации](docs/usage.ru.md) — полный справочник по `accept`, `calibrate`, `render`, `pin`, `--installation`, `.acceptbox.toml`, кодам выхода, кодам причин и правилам записи отчётов.
+- [Журнал решений](docs/decisions.ru.md) — журнал архитектурных решений в режиме append-only (`L8`–`L32`).
 
 Документация доступна на английском и русском языках; каждая страница ссылается на свой перевод.
 

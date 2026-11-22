@@ -1,4 +1,4 @@
-"""Командная строка AcceptBox: --version, --installation, pin, accept, calibrate."""
+"""Командная строка AcceptBox: --version, --installation, pin, accept, calibrate, render."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ from .inputs import (InputError, build_runtime_env, parse_env_entry, parse_invar
                      validate_commit_sha, validate_pathspec, validate_ref,
                      validate_repo_source, validate_sha256, validate_timeout)
 from .pin import EbtPathMissing, tree_sha256, tree_sha256_in_repo
+from .render import (RenderError, load_report, render_html, render_markdown,
+                     write_rendered_output)
 from .report import (OutDirLock, OutNotEmptyError, atomic_write_json, completed_run,
                      skipped_run, utc_now_iso)
 from .verdict import (RunOutcome, Verdict, ancestry_verdict, base_not_on_ref, coverage,
@@ -1141,6 +1143,25 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     return 2
 
 
+def _cmd_render(args: argparse.Namespace) -> int:
+    """Рендеринг accept.json / calibrate.json в Markdown или автономный HTML5 (L32)."""
+    try:
+        payload = load_report(Path(args.report))
+        rendered = (render_markdown(payload) if args.format == "md"
+                    else render_html(payload))
+        if args.out is not None:
+            write_rendered_output(Path(args.out), rendered)
+        else:
+            sys.stdout.write(rendered)
+    except RenderError as failure:
+        print(f"acceptbox: {failure}", file=sys.stderr)
+        return 2
+    except OSError as io_failure:
+        print(f"acceptbox: сбой ввода-вывода: {io_failure}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="acceptbox",
@@ -1166,6 +1187,16 @@ def _build_parser() -> argparse.ArgumentParser:
     calibrate = commands.add_parser(
         "calibrate", help="калибровка чувствительности прогонщиков (L18)")
     _add_calibrate_flags(calibrate)
+
+    render = commands.add_parser(
+        "render",
+        help="преобразовать accept.json / calibrate.json в Markdown или HTML (L32)",
+    )
+    render.add_argument("report", help="путь к отчёту accept.json или calibrate.json (format 1)")
+    render.add_argument("--format", required=True, choices=("md", "html"),
+                        help="формат вывода: md (Markdown) или html (автономный HTML5)")
+    render.add_argument("--out", default=None,
+                        help="выходной файл (атомарная запись; по умолчанию stdout)")
     return parser
 
 
@@ -1289,6 +1320,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_accept(args, cmd_argv)
     if args.command == "calibrate":
         return _cmd_calibrate(args, cmd_argv)
+    if args.command == "render":
+        if cmd_argv is not None:
+            parser.error("render не принимает аргументы после --")
+        return _cmd_render(args)
     parser.print_help()
     return 0
 

@@ -14,7 +14,7 @@ Prints format-`1` JSON containing:
 - `format`: `1`
 - `report_format`: `1`
 - `distribution`: `"acceptbox"`
-- `version`: installed version (e.g. `"0.3.0"`)
+- `version`: installed version (e.g. `"0.4.0"`)
 - `git`: status (`"ok" | "missing" | "error"`), path, version
 - `witnessbox`: path, version, `supported: ">=0.10.0"`, status (`"compatible" | "missing" | "incompatible" | "error"`)
 
@@ -202,6 +202,23 @@ acceptbox calibrate \
   [--env KEY[=VAL] ...] \
   [--out /tmp/calibrate-ebt-run]
 ```
+
+## Rendering reports (`render`)
+
+Converts a format-`1` `accept.json` or `calibrate.json` report into human-readable Markdown (for PR comments or CI job summaries) or a self-contained HTML5 page (inline CSS only, zero external scripts/CDNs/fonts):
+
+```sh
+# Print Markdown to stdout
+acceptbox render /tmp/accept-run/accept.json --format md
+
+# Write a self-contained HTML5 report atomically
+acceptbox render /tmp/accept-run/accept.json --format html --out /tmp/accept-run/report.html
+```
+
+- **Pure function of the JSON report:** `render` does not invoke `git` or any subprocess and does not read external run logs from disk.
+- **L31 verdict visibility:** the top banner shows `result`, `[policy=…]` (for `accept`), `mode`, `reason_code`, and `message`; any `warnings` are shown prominently right below the banner and are never collapsed.
+- **Strict escaping:** all dynamic values (paths, messages, warnings, reasons, commits, invariants) are escaped with `html.escape(..., quote=True)` in HTML and pipe/newline-escaped in Markdown tables.
+- **Atomic output & exit codes:** without `--out`, output is written to `stdout`; with `--out <path>`, output is written atomically via a temporary file in the same directory + `fsync` + `os.replace`. Returns exit code `0` on success and exit code `2` (to `stderr`, without creating `--out`) on missing/unreadable/invalid JSON, unsupported `format != 1`, missing parent directory, or extra arguments after `--`.
 
 ## Exit codes, reason codes, and report rules
 
