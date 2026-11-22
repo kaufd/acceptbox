@@ -65,8 +65,8 @@ def _run_cli(args: list[str], *, env: dict[str, str] | None = None,
 
 
 def _extract_report_path(output: str) -> Path:
-    match = re.search(r"\(отчёт:\s*(.+?)\)\s*$", output.strip(), re.MULTILINE)
-    assert match is not None, f"путь отчёта не найден в выводе: {output!r}"
+    match = re.search(r"\(report:\s*(.+?)\)\s*$", output.strip(), re.MULTILINE)
+    assert match is not None, f"report path not found in output: {output!r}"
     return Path(match.group(1))
 
 
@@ -546,7 +546,7 @@ class TestL22Defaults(unittest.TestCase):
             self.assertEqual(res.returncode, 1, res.stderr)
             data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
             self.assertEqual(data["reason_code"], "inputs-untrusted")
-            self.assertIn("не является предком", data["checks"]["ebt_trust"]["reason"])
+            self.assertIn("is not an ancestor", data["checks"]["ebt_trust"]["reason"])
             self.assertEqual(data["checks"]["ebt_trust"]["ref_source_kind"], "origin")
             self.assertEqual(data["inputs"]["ebt"]["ref_source_kind"], "origin")
 

@@ -33,31 +33,31 @@ class RenderError(ValueError):
 def detect_report_kind(payload: object) -> str:
     """Проверить структуру отчёта format 1 и вернуть ``'accept'`` или ``'calibrate'``."""
     if not isinstance(payload, dict):
-        raise RenderError("корень отчёта должен быть JSON-объектом")
+        raise RenderError("report root must be a JSON object")
     fmt = payload.get("format")
     if type(fmt) is not int or fmt != REPORT_FORMAT:
         raise RenderError(
-            f"неподдерживаемый формат отчёта: ожидается format == {REPORT_FORMAT}, получено {fmt!r}"
+            f"unsupported report format: expected format == {REPORT_FORMAT}, got {fmt!r}"
         )
     result = payload.get("result")
     if not isinstance(result, str) or not result.strip():
-        raise RenderError("в отчёте отсутствует строковое поле result")
+        raise RenderError("report is missing string field 'result'")
 
     has_accept = ("checks" in payload) or ("runs" in payload)
     has_calibrate = "results" in payload
     if has_accept and has_calibrate:
-        raise RenderError("неоднозначный отчёт: одновременно присутствуют поля accept и calibrate")
+        raise RenderError("ambiguous report: contains both accept and calibrate fields")
     if has_accept:
         if not isinstance(payload.get("checks"), dict) or not isinstance(payload.get("runs"), dict):
-            raise RenderError("отчёт accept должен содержать объекты checks и runs")
+            raise RenderError("accept report must contain 'checks' and 'runs' objects")
         return "accept"
     if has_calibrate:
         results = payload.get("results")
         if not isinstance(results, list) or not all(isinstance(item, dict) for item in results):
-            raise RenderError("отчёт calibrate должен содержать список объектов results")
+            raise RenderError("calibrate report must contain a 'results' list of objects")
         return "calibrate"
     raise RenderError(
-        "неизвестный тип отчёта: ожидаются checks/runs (accept.json) или results (calibrate.json)"
+        "unknown report type: expected checks/runs (accept.json) or results (calibrate.json)"
     )
 
 
@@ -65,44 +65,44 @@ def load_report(path: Path | str) -> dict:
     """Прочитать и провалидировать отчёт accept.json / calibrate.json (fail-closed)."""
     raw_path = str(path)
     if not raw_path.strip():
-        raise RenderError("укажите путь к файлу отчёта")
+        raise RenderError("specify a path to the report file")
     if "\x00" in raw_path or any(ord(ch) < 32 for ch in raw_path):
-        raise RenderError("путь к отчёту содержит недопустимые управляющие символы")
+        raise RenderError("report path contains invalid control characters")
 
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(raw_path, flags)
     except FileNotFoundError as missing:
-        raise RenderError(f"файл отчёта не найден: {raw_path}") from missing
+        raise RenderError(f"report file not found: {raw_path}") from missing
     except OSError as io_error:
-        raise RenderError(f"не удалось открыть отчёт {raw_path}: {io_error}") from io_error
+        raise RenderError(f"failed to open report {raw_path}: {io_error}") from io_error
 
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise RenderError(f"путь к отчёту должен быть обычным файлом: {raw_path}")
+            raise RenderError(f"report path must be a regular file: {raw_path}")
         handle = os.fdopen(descriptor, "rb")
     except RenderError:
         os.close(descriptor)
         raise
     except OSError as io_error:
         os.close(descriptor)
-        raise RenderError(f"не удалось открыть отчёт {raw_path}: {io_error}") from io_error
+        raise RenderError(f"failed to open report {raw_path}: {io_error}") from io_error
 
     with handle:
         try:
             raw_bytes = handle.read()
         except OSError as io_error:
-            raise RenderError(f"не удалось прочитать отчёт {raw_path}: {io_error}") from io_error
+            raise RenderError(f"failed to read report {raw_path}: {io_error}") from io_error
 
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as decode_error:
-        raise RenderError(f"некорректная кодировка UTF-8 в {raw_path}: {decode_error}") from decode_error
+        raise RenderError(f"invalid UTF-8 encoding in {raw_path}: {decode_error}") from decode_error
 
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as json_error:
-        raise RenderError(f"некорректный JSON в {raw_path}: {json_error}") from json_error
+        raise RenderError(f"invalid JSON in {raw_path}: {json_error}") from json_error
 
     detect_report_kind(payload)
     return payload
@@ -116,18 +116,18 @@ def write_rendered_output(out_path: Path | str, content: str, *,
     """
     raw_path = str(out_path)
     if not raw_path.strip():
-        raise RenderError("--out: укажите путь к выходному файлу")
+        raise RenderError("--out: specify a path to the output file")
     if "\x00" in raw_path or any(ord(ch) < 32 for ch in raw_path):
-        raise RenderError("--out: путь содержит недопустимые управляющие символы")
+        raise RenderError("--out: path contains invalid control characters")
 
     target = Path(raw_path)
     if target.exists() and target.is_dir():
-        raise RenderError(f"--out указывает на каталог, а не на файл: {target}")
+        raise RenderError(f"--out points to a directory, not a file: {target}")
     parent = target.parent
     if not parent.exists() or not parent.is_dir():
-        raise RenderError(f"--out: родительский каталог не существует: {parent}")
+        raise RenderError(f"--out: parent directory does not exist: {parent}")
     if source is not None and target.exists() and os.path.samefile(source, target):
-        raise RenderError(f"--out совпадает с исходным отчётом: {target}")
+        raise RenderError(f"--out points to the source report: {target}")
 
     tmp_path: Path | None = None
     try:
@@ -146,7 +146,7 @@ def write_rendered_output(out_path: Path | str, content: str, *,
         os.replace(tmp_path, target)
         tmp_path = None
     except OSError as io_error:
-        raise RenderError(f"не удалось записать {target}: {io_error}") from io_error
+        raise RenderError(f"failed to write {target}: {io_error}") from io_error
     finally:
         if tmp_path is not None:
             try:
@@ -319,6 +319,7 @@ class _Section:
     headers: tuple[str, ...]
     rows: list[list[_Cell]]
     kv: bool = False  # таблица «ключ — значение»: в HTML без шапки, ключ выделен
+    collapsible: bool = False  # свёрнуто по умолчанию (<details>)
 
 
 @dataclass(frozen=True)
@@ -348,9 +349,11 @@ def _scalar(value: object) -> _Cell:
     return _code(None if value is None else _format_scalar(value))
 
 
-def _kv(title: str, key_header: str, rows: list[tuple[str, _Cell]]) -> _Section:
+def _kv(title: str, key_header: str, rows: list[tuple[str, _Cell]], *,
+        collapsible: bool = False) -> _Section:
     return _Section(title, (key_header, "Value" if key_header != "Category" else "Items"),
-                    [[_Cell("label", label), cell] for label, cell in rows], kv=True)
+                    [[_Cell("label", label), cell] for label, cell in rows],
+                    kv=True, collapsible=collapsible)
 
 
 def _build_report(payload: dict) -> _Report:
@@ -358,49 +361,6 @@ def _build_report(payload: dict) -> _Report:
     repo = _as_dict(payload.get("repo"))
     inputs = _as_dict(payload.get("inputs"))
     sections: list[_Section] = []
-
-    repo_rows = [("source", _code(repo.get("source"))), ("base", _code(repo.get("base")))]
-    if kind == "accept":
-        repo_rows += [(key, _code(repo.get(key))) for key in ("repro", "head", "head_tree")]
-    repo_rows += [(key, _code(payload.get(key))) for key in ("run_id", "started_at", "finished_at")]
-    sections.append(_kv("Repository & Commits", "Key", repo_rows))
-
-    input_rows: list[tuple[str, _Cell]] = []
-    config_block = inputs.get("config")
-    if isinstance(config_block, dict):
-        input_rows += [(f"config.{key}", _code(config_block.get(key)))
-                       for key in ("path", "commit", "sha256")]
-    else:
-        input_rows.append(("config", _code(None)))
-    if kind == "accept":
-        input_rows += [
-            ("base_ref", _code(inputs.get("base_ref"))),
-            ("strict_refs", _scalar(inputs.get("strict_refs"))),
-            ("repro_source", _code(inputs.get("repro_source"))),
-        ]
-    input_rows.append(("timeout_sec", _code(inputs.get("timeout_sec"))))
-    for key in ("protect", "env_keys", "tests"):
-        if key in inputs:
-            input_rows.append((key, _codes(inputs.get(key))))
-    if "command" in inputs:
-        command = inputs.get("command")
-        input_rows.append(("command", _code(" ".join(str(part) for part in command)
-                                            if isinstance(command, list) else None)))
-    if "inv" in inputs:
-        input_rows.append(("inv", _codes(inputs.get("inv"))))
-    ebt_block = inputs.get("ebt")
-    if isinstance(ebt_block, dict):
-        for key in ("repo", "ref", "sha", "pinned_from_ref", "approved_tree_sha256",
-                    "actual_tree_sha256", "spec_sha256", "ref_source", "ref_source_kind"):
-            if key in ebt_block:
-                input_rows.append((f"ebt.{key}", _scalar(ebt_block.get(key))))
-    sections.append(_kv("Inputs & Configuration", "Parameter", input_rows))
-
-    witnessbox_block = payload.get("witnessbox")
-    if isinstance(witnessbox_block, dict):
-        sections.append(_kv("WitnessBox", "Field", [
-            (key, _code(witnessbox_block.get(key)))
-            for key in ("version", "gate_sha256", "checker_sha256")]))
 
     if kind == "accept":
         checks = _as_dict(payload.get("checks"))
@@ -437,6 +397,49 @@ def _build_report(payload: dict) -> _Report:
         sections.append(_Section(
             "Results", ("Commit", "Expected", "Status", "Matched", "Exit Code", "Duration (ms)",
                         "Reason", "Log Path"), result_rows))
+
+    repo_rows = [("source", _code(repo.get("source"))), ("base", _code(repo.get("base")))]
+    if kind == "accept":
+        repo_rows += [(key, _code(repo.get(key))) for key in ("repro", "head", "head_tree")]
+    repo_rows += [(key, _code(payload.get(key))) for key in ("run_id", "started_at", "finished_at")]
+    sections.append(_kv("Repository & Commits", "Key", repo_rows, collapsible=True))
+
+    input_rows: list[tuple[str, _Cell]] = []
+    config_block = inputs.get("config")
+    if isinstance(config_block, dict):
+        input_rows += [(f"config.{key}", _code(config_block.get(key)))
+                       for key in ("path", "commit", "sha256")]
+    else:
+        input_rows.append(("config", _code(None)))
+    if kind == "accept":
+        input_rows += [
+            ("base_ref", _code(inputs.get("base_ref"))),
+            ("strict_refs", _scalar(inputs.get("strict_refs"))),
+            ("repro_source", _code(inputs.get("repro_source"))),
+        ]
+    input_rows.append(("timeout_sec", _code(inputs.get("timeout_sec"))))
+    for key in ("protect", "env_keys", "tests"):
+        if key in inputs:
+            input_rows.append((key, _codes(inputs.get(key))))
+    if "command" in inputs:
+        command = inputs.get("command")
+        input_rows.append(("command", _code(" ".join(str(part) for part in command)
+                                            if isinstance(command, list) else None)))
+    if "inv" in inputs:
+        input_rows.append(("inv", _codes(inputs.get("inv"))))
+    ebt_block = inputs.get("ebt")
+    if isinstance(ebt_block, dict):
+        for key in ("repo", "ref", "sha", "pinned_from_ref", "approved_tree_sha256",
+                    "actual_tree_sha256", "spec_sha256", "ref_source", "ref_source_kind"):
+            if key in ebt_block:
+                input_rows.append((f"ebt.{key}", _scalar(ebt_block.get(key))))
+    sections.append(_kv("Inputs & Configuration", "Parameter", input_rows, collapsible=True))
+
+    witnessbox_block = payload.get("witnessbox")
+    if isinstance(witnessbox_block, dict):
+        sections.append(_kv("WitnessBox", "Field", [
+            (key, _code(witnessbox_block.get(key)))
+            for key in ("version", "gate_sha256", "checker_sha256")]))
 
     return _Report(
         kind=kind, result=str(payload["result"]),
@@ -496,10 +499,20 @@ def render_markdown(payload: dict) -> str:
         lines.append("")
 
     for section in report.sections:
-        lines += [f"## {section.title}", ""]
-        lines += _md_table(list(section.headers),
-                           [[_md_value(cell) for cell in row] for row in section.rows])
-        lines.append("")
+        table_lines = _md_table(list(section.headers),
+                                [[_md_value(cell) for cell in row] for row in section.rows])
+        if section.collapsible:
+            lines += [
+                "<details>",
+                f"<summary><strong>{_e(section.title)}</strong></summary>",
+                "",
+                *table_lines,
+                "",
+                "</details>",
+                "",
+            ]
+        else:
+            lines += [f"## {section.title}", "", *table_lines, ""]
     return "\n".join(lines)
 
 
@@ -600,7 +613,8 @@ main {
 .warnings li {
   margin: 4px 0;
 }
-section.card {
+section.card,
+details.card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -612,6 +626,32 @@ section.card h2 {
   margin: 0 0 12px;
   font-size: 1.15rem;
   color: var(--text);
+}
+details.card > summary {
+  cursor: pointer;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+details.card > summary::-webkit-details-marker {
+  display: none;
+}
+details.card > summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+details.card[open] > summary {
+  margin-bottom: 12px;
+}
+details.card[open] > summary::before {
+  transform: rotate(90deg);
 }
 .table-wrap {
   overflow-x: auto;
@@ -633,6 +673,12 @@ th {
   background: #f8fafc;
   white-space: nowrap;
 }
+th:first-child,
+td:first-child {
+  white-space: nowrap;
+  min-width: 120px;
+  padding-right: 18px;
+}
 tr:last-child td {
   border-bottom: none;
 }
@@ -644,8 +690,14 @@ code {
   border-radius: 4px;
   word-break: break-word;
 }
+td:first-child code,
+td a code {
+  white-space: nowrap;
+  word-break: normal;
+}
 .kv-key {
   width: 240px;
+  min-width: 230px;
   white-space: nowrap;
   font-weight: 600;
   color: var(--muted);
@@ -657,6 +709,8 @@ code {
   font-size: 0.82rem;
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: nowrap;
+  word-break: normal;
 }
 .status-ok { background: var(--ok-bg); color: var(--ok-text); }
 .status-fail { background: var(--fail-bg); color: var(--fail-text); }
@@ -767,6 +821,9 @@ def _html_section(section: _Section, log_base: str) -> str:
             "<tr>" + "".join(f"<td>{_html_value(cell, log_base)}</td>" for cell in row) + "</tr>"
             for row in section.rows)
         table = f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    if section.collapsible:
+        return (f'<details class="card"><summary>{_e(section.title)}</summary>'
+                f'<div class="table-wrap">{table}</div></details>')
     return (f'<section class="card"><h2>{_e(section.title)}</h2>'
             f'<div class="table-wrap">{table}</div></section>')
 

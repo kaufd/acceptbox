@@ -72,20 +72,20 @@ def run_commit(worktree: Path, commit_sha: str, run_dir: Path, env: dict[str, st
                                       env=clean_env, timeout=timeout)
     except subprocess.TimeoutExpired as expired:
         stdout, stderr = expired.stdout or b"", expired.stderr or b""
-        status, reason = "error", f"команда превысила таймаут {timeout:g} с"
+        status, reason = "error", f"command timed out after {timeout:g}s"
     except OSError as os_error:
-        status, reason = "error", f"не удалось запустить команду: {os_error}"
+        status, reason = "error", f"failed to start command: {os_error}"
     else:
         stdout, stderr = completed.stdout, completed.stderr
         exit_code = completed.returncode
         if completed.returncode == 0:
-            status, reason = "green", "команда завершилась с кодом 0"
+            status, reason = "green", "command exited with code 0"
         elif completed.returncode == 1:
-            status, reason = "red", "команда завершилась с кодом 1"
+            status, reason = "red", "command exited with code 1"
         elif completed.returncode < 0:
-            status, reason = "error", f"команда завершена сигналом {-completed.returncode}"
+            status, reason = "error", f"command terminated by signal {-completed.returncode}"
         else:
-            status, reason = "error", f"команда завершилась с кодом {completed.returncode}"
+            status, reason = "error", f"command exited with code {completed.returncode}"
     duration_ms = int((time.monotonic() - started) * 1000)
     (run_dir / LOG_NAME).write_bytes(stdout + stderr)
     return RunOutcome(status=status, exit_code=exit_code, reason=reason,

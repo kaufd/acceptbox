@@ -143,3 +143,12 @@ Revisit if: the agent must be treated as adversarial — then `--pin-from-ref` s
 - **Labels in English:** section and table labels are English (they mirror report keys); report content — `message`, `warnings`, reasons — is rendered verbatim in its original language.
 - **No schema or runner changes:** `acceptbox accept` and `acceptbox calibrate` behavior and format-`1` report schemas remain unchanged.
 Revisit if: rendering needs to embed truncated run log excerpts or support a future format-`2` report schema.
+
+## L33 — English CLI/report output and rendered report layout polish (extends L31, L32)
+2026-11-22. Accepted by owner.
+- **English CLI and report output:** all user-facing CLI messages, `--help` descriptions, error messages, summary lines (`acceptbox: … (report: …)`), warning lines (`acceptbox: warning: …`), and report text fields (`message`, `warnings`, `runs.*.reason`, `checks.*.reason`) in `src/acceptbox/` are written in English. Format-`1` JSON structure, keys, and `reason_code` values are unchanged.
+- **Rendered report layout (`acceptbox render`):**
+  - `Checks`, `Runs`, and `Coverage` (and `Results` for `calibrate`) are placed directly below the top verdict banner and `Warnings`, ahead of `Repository & Commits` and `Inputs & Configuration`.
+  - `Repository & Commits` and `Inputs & Configuration` are rendered collapsed by default (`<details>` with click-to-expand, zero JavaScript in HTML; `<details>` blocks in GFM Markdown). `Warnings` remain always visible and never collapsed (L31).
+  - First-column table cells and badges in HTML use `white-space: nowrap` and `word-break: normal` with a minimum column width so short identifiers (such as `protected_paths` and `repro`) do not wrap mid-word.
+Revisit if: localized CLI output (`gettext` / `--lang`) is ever requested.

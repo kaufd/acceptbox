@@ -18,7 +18,7 @@ These rules apply to every coding agent working on this repository (Claude Code 
 ## Language, documentation, and verification
 
 - **Documentation is bilingual:** English is the primary version (`README.md`, `docs/<name>.md`), and Russian sits next to it (`README.ru.md`, `docs/<name>.ru.md`). Every documentation page starts with the language switcher right below the title (`**English** · [Русский](...)` or `[English](...) · **Русский**`). Links inside English docs point to `.md`; links inside Russian docs point to `.ru.md`; links in `README.md` use absolute GitHub URLs so they work on PyPI. Update both languages in the same change.
-- **Pull requests and this file** are written in English; code identifiers are in English. (Existing CLI/report messages in `src/acceptbox/` remain as currently implemented unless changed by a separate decision.)
+- **Pull requests and this file** are written in English; code identifiers and all CLI/report output messages in `src/acceptbox/` are in English ([L33](docs/decisions.md)).
 - All tests must run without depending on personal directories or external repositories:
   ```sh
   python3 -m unittest discover -s tests

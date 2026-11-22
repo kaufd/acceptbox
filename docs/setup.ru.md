@@ -259,7 +259,7 @@ ebt_ref = "main"
 6. **Отразите результат приёмки в Pull Request.** Добавьте секцию `## Acceptance`:
    - вывод `acceptbox render <путь к accept.json> --format md` (вердикт, политика, предупреждения,
      SHA `base`/`repro`/`head` и `ref_source_kind`); если `render` недоступен — SHA, вердикт с кодом
-     выхода, `ref_source_kind` и все строки `acceptbox: внимание:`;
+     выхода, `ref_source_kind` и все строки `acceptbox: warning:`;
    - список **Not verified** (поведение вне репро-теста, ручные/UI-сценарии или пометка, что
      локальный прогон шёл с `ref_source_kind: "local"` и ждёт проверки в CI).
    Если запустить AcceptBox локально не удалось, прямо укажите это и причину.

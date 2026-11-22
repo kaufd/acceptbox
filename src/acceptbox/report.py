@@ -48,16 +48,16 @@ class OutDirLock:
         except FileExistsError:
             if self.out_path.is_symlink() or not self.out_path.is_dir():
                 raise OutNotEmptyError(
-                    f"--out существует и не является каталогом: {self.out_path}") from None
+                    f"--out exists and is not a directory: {self.out_path}") from None
             entries = os.listdir(self.out_path)
             if entries:
                 raise OutNotEmptyError(
-                    f"--out не пуст: {', '.join(sorted(entries)[:10])}") from None
+                    f"--out is not empty: {', '.join(sorted(entries)[:10])}") from None
         try:
             descriptor = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             raise OutNotEmptyError(
-                f"--out занят другим процессом или содержит {LOCK_NAME}: {self.out_path}") from None
+                f"--out is locked by another process or contains {LOCK_NAME}: {self.out_path}") from None
         else:
             os.close(descriptor)
         try:
@@ -67,7 +67,7 @@ class OutDirLock:
             raise
         if leftovers:
             self._release_lock()
-            raise OutNotEmptyError(f"--out не пуст: {', '.join(sorted(leftovers)[:10])}")
+            raise OutNotEmptyError(f"--out is not empty: {', '.join(sorted(leftovers)[:10])}")
         return self
 
     def __exit__(self, *exc_info: object) -> None:
