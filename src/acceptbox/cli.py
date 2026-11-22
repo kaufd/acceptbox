@@ -1146,11 +1146,18 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 def _cmd_render(args: argparse.Namespace) -> int:
     """Рендеринг accept.json / calibrate.json в Markdown или автономный HTML5 (L32)."""
     try:
-        payload = load_report(Path(args.report))
-        rendered = (render_markdown(payload) if args.format == "md"
-                    else render_html(payload))
+        report_path = Path(args.report)
+        payload = load_report(report_path)
+        if args.format == "md":
+            rendered = render_markdown(payload)
+        else:
+            # Ссылки на логи runs/... строятся от места сохранения страницы до каталога отчёта.
+            log_base = "" if args.out is None else os.path.relpath(
+                os.path.dirname(os.path.abspath(report_path)),
+                os.path.dirname(os.path.abspath(args.out)))
+            rendered = render_html(payload, log_base="" if log_base == "." else log_base)
         if args.out is not None:
-            write_rendered_output(Path(args.out), rendered)
+            write_rendered_output(Path(args.out), rendered, source=report_path)
         else:
             sys.stdout.write(rendered)
     except RenderError as failure:

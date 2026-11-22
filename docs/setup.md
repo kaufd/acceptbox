@@ -257,9 +257,9 @@ worktrees. The rules below apply to every coding agent working in this repositor
    referenced in `accept.json`. Fix the underlying problem (e.g. wrong commit split, missing
    reproduction, incomplete fix) rather than bypassing checks.
 6. **Report acceptance in the pull request.** Include an `## Acceptance` section with:
-   - `base`, `repro`, and `head` full SHAs;
-   - `acceptbox accept` verdict (`ACCEPTED` / `REJECTED` / `ERROR`), exit code, and `ref_source_kind`
-     (`remote` / `origin` / `local`);
+   - the output of `acceptbox render <path-to-accept.json> --format md` (verdict, policy, warnings,
+     `base`/`repro`/`head` SHAs, and `ref_source_kind`); if `render` is unavailable, give the SHAs,
+     the verdict with exit code, `ref_source_kind`, and every `acceptbox: внимание:` line;
    - a **Not verified** list (behaviour outside the repro test, UI/manual paths, or if local
      acceptance had `ref_source_kind: "local"` and awaits CI verification).
    If you could not run AcceptBox locally, say so explicitly and why.

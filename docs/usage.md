@@ -217,8 +217,10 @@ acceptbox render /tmp/accept-run/accept.json --format html --out /tmp/accept-run
 
 - **Pure function of the JSON report:** `render` does not invoke `git` or any subprocess and does not read external run logs from disk.
 - **L31 verdict visibility:** the top banner shows `result`, `[policy=…]` (for `accept`), `mode`, `reason_code`, and `message`; any `warnings` are shown prominently right below the banner and are never collapsed.
-- **Strict escaping:** all dynamic values (paths, messages, warnings, reasons, commits, invariants) are escaped with `html.escape(..., quote=True)` in HTML and pipe/newline-escaped in Markdown tables.
-- **Atomic output & exit codes:** without `--out`, output is written to `stdout`; with `--out <path>`, output is written atomically via a temporary file in the same directory + `fsync` + `os.replace`. Returns exit code `0` on success and exit code `2` (to `stderr`, without creating `--out`) on missing/unreadable/invalid JSON, unsupported `format != 1`, missing parent directory, or extra arguments after `--`.
+- **Strict escaping:** all dynamic values are escaped with `html.escape(..., quote=True)` in HTML. In Markdown, free text (message, warnings, run reasons) has GFM specials backslash-escaped (`src/pkg/__init__.py` stays literal, `@name` notifies nobody), and identifiers are shown in code spans.
+- **Run log links (HTML):** `runs/...` log paths are clickable, relative to where the page is written (`--out`); on `stdout`, links assume the page is saved next to the report.
+- **Labels:** section and table labels are English; `message`, `warnings`, and reasons are shown verbatim.
+- **Atomic output & exit codes:** without `--out`, output is written to `stdout`; with `--out <path>`, output is written atomically via a temporary file in the same directory + `fsync` + `os.replace`. Returns exit code `0` on success and exit code `2` (to `stderr`, without creating `--out`) on missing/unreadable/invalid JSON, unsupported `format != 1`, `--out` pointing at the source report, missing parent directory, or extra arguments after `--`.
 
 ## Exit codes, reason codes, and report rules
 

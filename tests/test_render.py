@@ -32,16 +32,53 @@ HEX64_C = "c" * 64
 HEX64_D = "d" * 64
 
 
-def _run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
+def _md_visible(markdown: str) -> str:
+    """Text a Markdown reader sees: backslash escapes removed."""
+    return re.sub(r"\\(.)", r"\1", markdown)
+
+
+def _run_cli(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{SRC_DIR}{os.pathsep}{existing_pp}" if existing_pp else SRC_DIR
     return subprocess.run(
         [PYTHON, "-m", "acceptbox.cli", *args],
         env=env,
+        cwd=cwd,
         capture_output=True,
         text=True,
     )
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def _make_real_accept_report(root: Path) -> Path:
+    """Run a real `acceptbox accept` (command mode, local repo without origin) and return accept.json."""
+    repo = root / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    check = "import sys; sys.exit(0 if open('app.txt').read().strip() == 'fixed' else 1)"
+    (repo / ".acceptbox.toml").write_text(
+        f'format = 1\n[command]\ntests = ["tests/"]\nargv = [{json.dumps(PYTHON)}, "-c", {json.dumps(check)}]\n',
+        encoding="utf-8")
+    (repo / "app.txt").write_text("broken\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "checkout", "-qb", "fix")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "repro.txt").write_text("repro\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "repro")
+    (repo / "app.txt").write_text("fixed\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "fix")
+    out = root / "accept-out"
+    res = _run_cli(["accept", "--base-ref", "main", "--out", str(out)], cwd=repo)
+    assert res.returncode == 0, res.stderr
+    return out / "accept.json"
 
 
 def _accept_bugfix_payload() -> dict:
@@ -571,11 +608,12 @@ class TestRenderCore(unittest.TestCase):
         _assert_valid_markdown_tables(self, md)
         warning_text = payload["warnings"][0]
         self.assertIn("[policy=refactor]", md)
-        self.assertIn(payload["message"], md)
+        visible = _md_visible(md)
+        self.assertIn(payload["message"], visible)
         self.assertIn("## Warnings", md)
-        self.assertIn(warning_text, md)
+        self.assertIn(warning_text, visible)
         # Warnings appear near the top — before Repository/Checks/Runs sections
-        self.assertLess(md.index(warning_text), md.index("## Repository & Commits"))
+        self.assertLess(visible.index(warning_text), visible.index("## Repository & Commits"))
         self.assertIn("`refactor`", md)
         self.assertIn("src/service.py", md)
         self.assertIn("src/helper.py", md)
@@ -613,7 +651,7 @@ class TestRenderCore(unittest.TestCase):
         self.assertIn("ERROR", md)
         self.assertIn("config-invalid", md)
         self.assertIn(HEX64_C, md)
-        self.assertIn("неизвестные ключи: bad_key", md)
+        self.assertIn("неизвестные ключи: bad_key", _md_visible(md))
 
         self.assertIn("banner-error", html_doc)
         self.assertIn("config-invalid", html_doc)
@@ -644,9 +682,10 @@ class TestRenderCore(unittest.TestCase):
         # Both warnings appear prominently before Repository section (escaped in HTML)
         for warning in payload["warnings"]:
             escaped_warning = html.escape(warning, quote=True)
-            self.assertIn(warning, md)
+            visible = _md_visible(md)
+            self.assertIn(warning, visible)
             self.assertIn(escaped_warning, html_doc)
-            self.assertLess(md.index(warning), md.index("## Repository & Commits"))
+            self.assertLess(visible.index(warning), visible.index("## Repository & Commits"))
             self.assertLess(html_doc.index(escaped_warning), html_doc.index("Repository &amp; Commits"))
 
     def test_calibrate_calibrated_and_failed(self) -> None:
@@ -705,6 +744,33 @@ class TestRenderCore(unittest.TestCase):
         md = render.render_markdown(payload)
         _assert_valid_markdown_tables(self, md)
         self.assertIn(r"\|", md)
+
+    def test_markdown_escapes_gfm_specials_in_plain_text(self) -> None:
+        tricky = "изменены защищённые пути: src/pkg/__init__.py <module> @team $x$ [l](u) *a*"
+        payload = _accept_rejected_diffs_payload()
+        payload["message"] = tricky
+        payload["warnings"] = [tricky]
+        md = render.render_markdown(payload)
+
+        _assert_valid_markdown_tables(self, md)
+        for escaped in (r"src/pkg/\_\_init\_\_.py", r"\<module\>", r"\@team", r"\$x\$",
+                        r"\[l\](u)", r"\*a\*"):
+            self.assertIn(escaped, md)
+        self.assertEqual(_md_visible(md).count(tricky), 2)  # message + warning
+        # Code spans stay literal: paths in Details/Runs are not backslash-escaped.
+        self.assertIn("`src/sneaky.py`", md)
+
+    def test_html_links_run_logs_relative_to_page(self) -> None:
+        payload = _accept_bugfix_payload()
+        self.assertIn('<a href="runs/head/output.log"><code>runs/head/output.log</code></a>',
+                      render.render_html(payload))
+        self.assertIn('href="../out/runs/head/output.log"',
+                      render.render_html(payload, log_base="../out"))
+        for unsafe in ("/abs/run.log", "runs/../../etc/passwd", "javascript:alert(1)"):
+            payload["runs"]["head"]["log_path"] = unsafe
+            html_doc = render.render_html(payload)
+            self.assertIn(f"<code>{html.escape(unsafe)}</code>", html_doc)
+            self.assertNotIn(f'href="{html.escape(unsafe)}"', html_doc)
 
     def test_pure_render_does_not_read_logs_or_spawn_subprocess(self) -> None:
         payload = _accept_bugfix_payload()
@@ -812,6 +878,40 @@ class TestRenderCLI(unittest.TestCase):
             self.assertEqual(res_fmt.returncode, 2)
             self.assertTrue(res_fmt.stderr.strip())
             self.assertFalse(out_file.exists())
+
+    def test_cli_render_refuses_to_overwrite_source_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "accept.json"
+            original = json.dumps(_accept_bugfix_payload())
+            report_path.write_text(original, encoding="utf-8")
+            res = _run_cli(["render", str(report_path), "--format", "md", "--out", str(report_path)])
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("совпадает с исходным отчётом", res.stderr)
+            self.assertEqual(report_path.read_text(encoding="utf-8"), original)
+
+    def test_cli_renders_real_accept_report_with_working_log_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = _make_real_accept_report(root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertTrue(report["warnings"])
+
+            res_md = _run_cli(["render", str(report_path), "--format", "md"])
+            self.assertEqual(res_md.returncode, 0, res_md.stderr)
+            _assert_valid_markdown_tables(self, res_md.stdout)
+            self.assertIn("# AcceptBox: ACCEPTED [policy=bugfix]", res_md.stdout)
+            for warning in report["warnings"]:
+                self.assertIn(warning, _md_visible(res_md.stdout))
+
+            # The page lives elsewhere: links must still reach the run logs.
+            out_file = root / "pages" / "report.html"
+            out_file.parent.mkdir()
+            res_html = _run_cli(["render", str(report_path), "--format", "html", "--out", str(out_file)])
+            self.assertEqual(res_html.returncode, 0, res_html.stderr)
+            hrefs = re.findall(r'href="([^"]+)"', out_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(hrefs), 2)  # repro and head runs
+            for href in hrefs:
+                self.assertTrue((out_file.parent / html.unescape(href)).is_file(), href)
 
     def test_cli_render_rejects_missing_parent_and_extra_args_after_dashdash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

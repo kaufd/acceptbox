@@ -44,7 +44,7 @@ Stop and ask the human instead of guessing when:
 ## Stage 0. Environment
 
 ```sh
-acceptbox --installation || uv tool install acceptbox==0.3.0
+acceptbox --installation || uv tool install acceptbox==0.4.0
 acceptbox --installation
 ```
 
@@ -204,7 +204,7 @@ acceptbox accept --base-ref main
 
 *(For refactorings: `acceptbox accept --policy refactor --base-ref main`. If your branch has helper commits before the repro commit, add `AcceptBox-Role: repro` as a trailer in the repro commit message, or pass `--repro "$REPRO"` explicitly.)*
 
-Quote the `acceptbox:` summary line and any `acceptbox: внимание:` lines verbatim in your report or PR — that is what the human reads.
+Put the result where the human reads it: run `acceptbox render <path-to-accept.json> --format md` (the path is printed after `отчёт:`) and paste its output into your report or PR. It already carries the verdict, `[policy=…]`, warnings, SHAs, and `ref_source_kind`. If you cannot run `render`, quote the `acceptbox:` summary line and every `acceptbox: внимание:` line verbatim.
 
 `witnessbox` mode (either with `--pin-from-ref` locally, or explicit `--ebt-sha` / `--approved-tree`; `--inv` is optional and auto-inferred from `base` → `repro` when omitted):
 

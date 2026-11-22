@@ -9,16 +9,21 @@ from __future__ import annotations
 import html
 import json
 import os
+import posixpath
 import re
 import stat
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 REPORT_FORMAT = 1
 
 _CHECK_ORDER = ("base_ref", "ebt_trust", "ancestry", "protected_paths", "repro_tests", "refactor")
 _RUN_ORDER = ("base", "repro", "head")
 _BACKTICK_RUN_RE = re.compile(r"`+")
+# Знаки, из которых GFM делает разметку, HTML, формулы ($) или @упоминания.
+_MD_SPECIAL_RE = re.compile(r"([\\`*_\[\]<>&|~!#$@])")
 
 
 class RenderError(ValueError):
@@ -103,8 +108,12 @@ def load_report(path: Path | str) -> dict:
     return payload
 
 
-def write_rendered_output(out_path: Path | str, content: str) -> Path:
-    """Атомарно записать сгенерированный отчёт: временный файл в том же каталоге + fsync + os.replace."""
+def write_rendered_output(out_path: Path | str, content: str, *,
+                          source: Path | str | None = None) -> Path:
+    """Атомарно записать сгенерированный отчёт: временный файл в том же каталоге + fsync + os.replace.
+
+    ``source`` — исходный отчёт: --out, указывающий на него, отклоняется (иначе отчёт затирается).
+    """
     raw_path = str(out_path)
     if not raw_path.strip():
         raise RenderError("--out: укажите путь к выходному файлу")
@@ -117,6 +126,8 @@ def write_rendered_output(out_path: Path | str, content: str) -> Path:
     parent = target.parent
     if not parent.exists() or not parent.is_dir():
         raise RenderError(f"--out: родительский каталог не существует: {parent}")
+    if source is not None and target.exists() and os.path.samefile(source, target):
+        raise RenderError(f"--out совпадает с исходным отчётом: {target}")
 
     tmp_path: Path | None = None
     try:
@@ -267,242 +278,228 @@ def _md_list_codes(items: list) -> str:
     return ", ".join(_md_code_span(item) for item in items)
 
 
-def _md_check_details(name: str, entry: dict) -> str:
-    items = _check_detail_items(name, entry)
+def _md_text(value: object) -> str:
+    """Обычный текст для Markdown: одна строка, спецсимволы GFM экранированы.
+
+    Иначе путь ``src/pkg/__init__.py`` станет жирным, ``<module>`` исчезнет как тег,
+    а ``@name`` в комментарии PR уведомит пользователя.
+    """
+    return _MD_SPECIAL_RE.sub(r"\\\1", _md_single_line(value))
+
+
+def _md_details(items: list[tuple[str, object]]) -> str:
     if not items:
         return "—"
     parts: list[str] = []
     for key, val in items:
         if isinstance(val, list):
             rendered = _md_list_codes(val) if val else "(none)"
-            parts.append(f"{_md_code_span(key)}: {rendered}")
         elif val is None:
-            parts.append(f"{_md_code_span(key)}: —")
-        elif isinstance(val, bool):
-            parts.append(f"{_md_code_span(key)}: `{_format_scalar(val)}`")
+            rendered = "—"
         else:
-            parts.append(f"{_md_code_span(key)}: {_md_code_span(val)}")
+            rendered = _md_code_span(_format_scalar(val))
+        parts.append(f"{_md_code_span(key)}: {rendered}")
     return "; ".join(parts)
+
+
+# --- Общая модель отчёта: одна структура, два сериализатора (Markdown и HTML) ---
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """Значение ячейки. kind: label (статическая подпись) | text | code | codes | status | details | log."""
+
+    kind: str
+    value: object = None
+
+
+@dataclass(frozen=True)
+class _Section:
+    title: str
+    headers: tuple[str, ...]
+    rows: list[list[_Cell]]
+    kv: bool = False  # таблица «ключ — значение»: в HTML без шапки, ключ выделен
+
+
+@dataclass(frozen=True)
+class _Report:
+    kind: str
+    result: str
+    policy: object
+    mode: object
+    reason_code: object
+    exit_code: object
+    scope: object
+    version: object
+    message: object
+    warnings: list[str]
+    sections: list[_Section]
+
+
+def _code(value: object) -> _Cell:
+    return _Cell("code", value)
+
+
+def _codes(value: object) -> _Cell:
+    return _Cell("codes", value if isinstance(value, list) else [])
+
+
+def _scalar(value: object) -> _Cell:
+    return _code(None if value is None else _format_scalar(value))
+
+
+def _kv(title: str, key_header: str, rows: list[tuple[str, _Cell]]) -> _Section:
+    return _Section(title, (key_header, "Value" if key_header != "Category" else "Items"),
+                    [[_Cell("label", label), cell] for label, cell in rows], kv=True)
+
+
+def _build_report(payload: dict) -> _Report:
+    kind = detect_report_kind(payload)
+    repo = _as_dict(payload.get("repo"))
+    inputs = _as_dict(payload.get("inputs"))
+    sections: list[_Section] = []
+
+    repo_rows = [("source", _code(repo.get("source"))), ("base", _code(repo.get("base")))]
+    if kind == "accept":
+        repo_rows += [(key, _code(repo.get(key))) for key in ("repro", "head", "head_tree")]
+    repo_rows += [(key, _code(payload.get(key))) for key in ("run_id", "started_at", "finished_at")]
+    sections.append(_kv("Repository & Commits", "Key", repo_rows))
+
+    input_rows: list[tuple[str, _Cell]] = []
+    config_block = inputs.get("config")
+    if isinstance(config_block, dict):
+        input_rows += [(f"config.{key}", _code(config_block.get(key)))
+                       for key in ("path", "commit", "sha256")]
+    else:
+        input_rows.append(("config", _code(None)))
+    if kind == "accept":
+        input_rows += [
+            ("base_ref", _code(inputs.get("base_ref"))),
+            ("strict_refs", _scalar(inputs.get("strict_refs"))),
+            ("repro_source", _code(inputs.get("repro_source"))),
+        ]
+    input_rows.append(("timeout_sec", _code(inputs.get("timeout_sec"))))
+    for key in ("protect", "env_keys", "tests"):
+        if key in inputs:
+            input_rows.append((key, _codes(inputs.get(key))))
+    if "command" in inputs:
+        command = inputs.get("command")
+        input_rows.append(("command", _code(" ".join(str(part) for part in command)
+                                            if isinstance(command, list) else None)))
+    if "inv" in inputs:
+        input_rows.append(("inv", _codes(inputs.get("inv"))))
+    ebt_block = inputs.get("ebt")
+    if isinstance(ebt_block, dict):
+        for key in ("repo", "ref", "sha", "pinned_from_ref", "approved_tree_sha256",
+                    "actual_tree_sha256", "spec_sha256", "ref_source", "ref_source_kind"):
+            if key in ebt_block:
+                input_rows.append((f"ebt.{key}", _scalar(ebt_block.get(key))))
+    sections.append(_kv("Inputs & Configuration", "Parameter", input_rows))
+
+    witnessbox_block = payload.get("witnessbox")
+    if isinstance(witnessbox_block, dict):
+        sections.append(_kv("WitnessBox", "Field", [
+            (key, _code(witnessbox_block.get(key)))
+            for key in ("version", "gate_sha256", "checker_sha256")]))
+
+    if kind == "accept":
+        checks = _as_dict(payload.get("checks"))
+        sections.append(_Section("Checks", ("Check", "Status", "Details"), [
+            [_code(name), _Cell("status", _as_dict(checks.get(name)).get("status")),
+             _Cell("details", _check_detail_items(name, _as_dict(checks.get(name))))]
+            for name in _ordered_keys(checks, _CHECK_ORDER)]))
+        runs = _as_dict(payload.get("runs"))
+        run_rows = []
+        for name in _ordered_keys(runs, _RUN_ORDER):
+            entry = _as_dict(runs.get(name))
+            run_rows.append([
+                _code(name), _code(entry.get("commit")), _Cell("status", entry.get("status")),
+                _code(entry.get("exit_code")), _code(entry.get("duration_ms")),
+                _Cell("text", entry.get("reason")), _Cell("log", entry.get("log_path"))])
+        sections.append(_Section(
+            "Runs", ("Run", "Commit", "Status", "Exit Code", "Duration (ms)", "Reason", "Log Path"),
+            run_rows))
+        cov = payload.get("coverage")
+        if isinstance(cov, dict):
+            sections.append(_kv("Coverage", "Category", [
+                (key, _codes(cov.get(key))) for key in ("checked", "skipped", "unchecked")]))
+    else:
+        result_rows = []
+        for entry in _as_list(payload.get("results")):
+            item = _as_dict(entry)
+            matched = item.get("matched")
+            result_rows.append([
+                _code(item.get("commit")), _code(item.get("expected")),
+                _Cell("status", item.get("status")),
+                _Cell("status", None if matched is None else _format_scalar(matched)),
+                _code(item.get("exit_code")), _code(item.get("duration_ms")),
+                _Cell("text", item.get("reason")), _Cell("log", item.get("log_path"))])
+        sections.append(_Section(
+            "Results", ("Commit", "Expected", "Status", "Matched", "Exit Code", "Duration (ms)",
+                        "Reason", "Log Path"), result_rows))
+
+    return _Report(
+        kind=kind, result=str(payload["result"]),
+        policy=payload.get("policy") if kind == "accept" else None,
+        mode=payload.get("mode"), reason_code=payload.get("reason_code"),
+        exit_code=payload.get("exit_code"), scope=payload.get("scope"),
+        version=payload.get("acceptbox_version"), message=payload.get("message"),
+        warnings=_warnings_list(payload), sections=sections)
+
+
+# --- Markdown ---
+
+
+def _md_value(cell: _Cell) -> str:
+    if cell.kind == "codes":
+        return _md_list_codes(cell.value)
+    if cell.kind == "details":
+        return _md_details(cell.value)
+    if cell.kind == "label":
+        return str(cell.value)  # подписи задаёт сам рендерер — экранировать нечего
+    if cell.kind == "text":
+        return "—" if cell.value is None else _md_text(cell.value)
+    return _md_code_or_dash(cell.value)  # code, status, log
 
 
 def render_markdown(payload: dict) -> str:
     """Сформировать Markdown-отчёт из словаря accept.json или calibrate.json (format 1)."""
-    kind = detect_report_kind(payload)
-    result = str(payload["result"])
-    policy = payload.get("policy") if kind == "accept" else None
-    mode = payload.get("mode")
-    scope = payload.get("scope")
-    reason_code = payload.get("reason_code")
-    exit_code = payload.get("exit_code")
-    message = payload.get("message")
-    warnings = _warnings_list(payload)
-    repo = _as_dict(payload.get("repo"))
-    inputs = _as_dict(payload.get("inputs"))
-    config_block = payload.get("inputs", {}).get("config") if isinstance(payload.get("inputs"), dict) else None
-    witnessbox_block = payload.get("witnessbox") if isinstance(payload.get("witnessbox"), dict) else None
-
-    title_parts = [f"AcceptBox: {result}"]
-    if policy is not None:
-        title_parts.append(f"[policy={_md_single_line(policy)}]")
-    if reason_code:
-        title_parts.append(f"({_md_single_line(reason_code)})")
-
-    lines: list[str] = [f"# {' '.join(title_parts)}", ""]
+    report = _build_report(payload)
+    title = f"# AcceptBox: {_md_text(report.result)}"
+    if report.policy is not None:
+        title += f" [policy={_md_text(report.policy)}]"
+    if report.reason_code:
+        title += f" ({_md_text(report.reason_code)})"
+    lines = [title, ""]
 
     # Сводка вердикта наверху (L31)
-    verdict_rows: list[list[str]] = [
-        ["Result", _md_code_span(result)],
+    verdict_rows = [["Result", _md_code_span(report.result)]]
+    if report.kind == "accept":
+        verdict_rows.append(["Policy", _md_code_or_dash(report.policy)])
+    verdict_rows += [
+        ["Mode", _md_code_or_dash(report.mode)],
+        ["Reason code", _md_code_or_dash(report.reason_code)],
+        ["Exit code", _md_code_or_dash(report.exit_code)],
+        ["Scope", _md_code_or_dash(report.scope)],
+        ["AcceptBox", _md_code_or_dash(report.version)],
+        ["Message", "—" if report.message is None else _md_text(report.message)],
     ]
-    if kind == "accept":
-        verdict_rows.append(["Policy", _md_code_or_dash(policy)])
-    verdict_rows.extend([
-        ["Mode", _md_code_or_dash(mode)],
-        ["Reason code", _md_code_or_dash(reason_code)],
-        ["Exit code", _md_code_or_dash(exit_code)],
-        ["Message", _md_cell(message) if message is not None else "—"],
-    ])
-    lines.extend(_md_table(["Field", "Value"], verdict_rows))
-    lines.append("")
+    lines += _md_table(["Field", "Value"], verdict_rows) + [""]
 
     # Предупреждения — всегда заметно наверху, никогда не сворачиваются (L31)
-    if warnings:
-        lines.append("## Warnings")
-        lines.append("")
-        for idx, warning in enumerate(warnings):
-            if idx > 0:
+    if report.warnings:
+        lines += ["## Warnings", ""]
+        for index, warning in enumerate(report.warnings):
+            if index:
                 lines.append(">")
-            lines.append(f"> **WARNING:** {_md_single_line(warning)}")
+            lines.append(f"> **WARNING:** {_md_text(warning)}")
         lines.append("")
 
-    # Репозиторий, коммиты и метаданные запуска
-    lines.append("## Repository & Commits")
-    lines.append("")
-    repo_rows: list[list[str]] = [
-        ["source", _md_code_or_dash(repo.get("source"))],
-        ["base", _md_code_or_dash(repo.get("base"))],
-    ]
-    if kind == "accept":
-        repo_rows.extend([
-            ["repro", _md_code_or_dash(repo.get("repro"))],
-            ["head", _md_code_or_dash(repo.get("head"))],
-            ["head_tree", _md_code_or_dash(repo.get("head_tree"))],
-        ])
-    repo_rows.extend([
-        ["scope", _md_code_or_dash(scope)],
-        ["acceptbox_version", _md_code_or_dash(payload.get("acceptbox_version"))],
-        ["run_id", _md_code_or_dash(payload.get("run_id"))],
-        ["started_at", _md_code_or_dash(payload.get("started_at"))],
-        ["finished_at", _md_code_or_dash(payload.get("finished_at"))],
-    ])
-    lines.extend(_md_table(["Key", "Value"], repo_rows))
-    lines.append("")
-
-    # Входные параметры и конфигурация
-    lines.append("## Inputs & Configuration")
-    lines.append("")
-    input_rows: list[list[str]] = []
-    if isinstance(config_block, dict):
-        input_rows.extend([
-            ["config.path", _md_code_or_dash(config_block.get("path"))],
-            ["config.commit", _md_code_or_dash(config_block.get("commit"))],
-            ["config.sha256", _md_code_or_dash(config_block.get("sha256"))],
-        ])
-    else:
-        input_rows.append(["config", "—"])
-
-    if kind == "accept":
-        input_rows.extend([
-            ["base_ref", _md_code_or_dash(inputs.get("base_ref"))],
-            ["strict_refs", _md_code_or_dash(_format_scalar(inputs.get("strict_refs")) if "strict_refs" in inputs else None)],
-            ["repro_source", _md_code_or_dash(inputs.get("repro_source"))],
-        ])
-
-    input_rows.append(["timeout_sec", _md_code_or_dash(inputs.get("timeout_sec"))])
-    if "protect" in inputs:
-        input_rows.append(["protect", _md_list_codes(_as_list(inputs.get("protect")))])
-    if "env_keys" in inputs:
-        input_rows.append(["env_keys", _md_list_codes(_as_list(inputs.get("env_keys")))])
-    if "tests" in inputs:
-        tests_val = inputs.get("tests")
-        input_rows.append(["tests", _md_list_codes(tests_val) if isinstance(tests_val, list) else "—"])
-    if "command" in inputs:
-        cmd_val = inputs.get("command")
-        input_rows.append(["command", _md_code_span(" ".join(str(x) for x in cmd_val)) if isinstance(cmd_val, list) else "—"])
-    if "inv" in inputs:
-        inv_val = inputs.get("inv")
-        input_rows.append(["inv", _md_list_codes(inv_val) if isinstance(inv_val, list) else "—"])
-
-    ebt_block = inputs.get("ebt")
-    if isinstance(ebt_block, dict):
-        for ebt_key in (
-            "repo",
-            "ref",
-            "sha",
-            "pinned_from_ref",
-            "approved_tree_sha256",
-            "actual_tree_sha256",
-            "spec_sha256",
-            "ref_source",
-            "ref_source_kind",
-        ):
-            if ebt_key in ebt_block:
-                val = ebt_block.get(ebt_key)
-                input_rows.append([
-                    f"ebt.{ebt_key}",
-                    _md_code_or_dash(_format_scalar(val) if val is not None else None),
-                ])
-
-    lines.extend(_md_table(["Parameter", "Value"], input_rows))
-    lines.append("")
-
-    # Блок WitnessBox (если присутствует)
-    if witnessbox_block is not None:
-        lines.append("## WitnessBox")
+    for section in report.sections:
+        lines += [f"## {section.title}", ""]
+        lines += _md_table(list(section.headers),
+                           [[_md_value(cell) for cell in row] for row in section.rows])
         lines.append("")
-        wb_rows = [
-            ["version", _md_code_or_dash(witnessbox_block.get("version"))],
-            ["gate_sha256", _md_code_or_dash(witnessbox_block.get("gate_sha256"))],
-            ["checker_sha256", _md_code_or_dash(witnessbox_block.get("checker_sha256"))],
-        ]
-        lines.extend(_md_table(["Field", "Value"], wb_rows))
-        lines.append("")
-
-    if kind == "accept":
-        # Таблица проверок
-        checks = _as_dict(payload.get("checks"))
-        lines.append("## Checks")
-        lines.append("")
-        check_rows: list[list[str]] = []
-        for check_name in _ordered_keys(checks, _CHECK_ORDER):
-            entry = _as_dict(checks.get(check_name))
-            status = entry.get("status")
-            check_rows.append([
-                _md_code_span(check_name),
-                _md_code_or_dash(status),
-                _md_check_details(check_name, entry),
-            ])
-        lines.extend(_md_table(["Check", "Status", "Details"], check_rows))
-        lines.append("")
-
-        # Таблица прогонов
-        runs = _as_dict(payload.get("runs"))
-        lines.append("## Runs")
-        lines.append("")
-        run_rows: list[list[str]] = []
-        for run_name in _ordered_keys(runs, _RUN_ORDER):
-            entry = _as_dict(runs.get(run_name))
-            run_rows.append([
-                _md_code_span(run_name),
-                _md_code_or_dash(entry.get("commit")),
-                _md_code_or_dash(entry.get("status")),
-                _md_code_or_dash(entry.get("exit_code")),
-                _md_code_or_dash(entry.get("duration_ms")),
-                _md_cell(entry.get("reason")) if entry.get("reason") is not None else "—",
-                _md_code_or_dash(entry.get("log_path")),
-            ])
-        lines.extend(_md_table(
-            ["Run", "Commit", "Status", "Exit Code", "Duration (ms)", "Reason", "Log Path"],
-            run_rows,
-        ))
-        lines.append("")
-
-        # Покрытие инвариантов
-        cov = payload.get("coverage")
-        if isinstance(cov, dict):
-            lines.append("## Coverage")
-            lines.append("")
-            cov_rows = [
-                ["checked", _md_list_codes(_as_list(cov.get("checked")))],
-                ["skipped", _md_list_codes(_as_list(cov.get("skipped")))],
-                ["unchecked", _md_list_codes(_as_list(cov.get("unchecked")))],
-            ]
-            lines.extend(_md_table(["Category", "Items"], cov_rows))
-            lines.append("")
-    else:
-        # Таблица результатов калибровки
-        results = _as_list(payload.get("results"))
-        lines.append("## Results")
-        lines.append("")
-        res_rows: list[list[str]] = []
-        for entry in results:
-            item = _as_dict(entry)
-            matched_val = item.get("matched")
-            res_rows.append([
-                _md_code_or_dash(item.get("commit")),
-                _md_code_or_dash(item.get("expected")),
-                _md_code_or_dash(item.get("status")),
-                _md_code_or_dash(_format_scalar(matched_val) if matched_val is not None else None),
-                _md_code_or_dash(item.get("exit_code")),
-                _md_code_or_dash(item.get("duration_ms")),
-                _md_cell(item.get("reason")) if item.get("reason") is not None else "—",
-                _md_code_or_dash(item.get("log_path")),
-            ])
-        lines.extend(_md_table(
-            ["Commit", "Expected", "Status", "Matched", "Exit Code", "Duration (ms)", "Reason", "Log Path"],
-            res_rows,
-        ))
-        lines.append("")
-
     return "\n".join(lines)
 
 
@@ -676,25 +673,26 @@ code {
 """
 
 
+_DASH_HTML = '<span class="muted">—</span>'
+
+
 def _e(value: object) -> str:
     return html.escape(str(value), quote=True)
 
 
 def _html_code_or_dash(value: object) -> str:
-    if value is None:
-        return '<span class="muted">—</span>'
-    return f"<code>{_e(value)}</code>"
+    return _DASH_HTML if value is None else f"<code>{_e(value)}</code>"
 
 
 def _html_list_codes(items: list) -> str:
     if not items:
-        return '<span class="muted">—</span>'
+        return _DASH_HTML
     return ", ".join(f"<code>{_e(item)}</code>" for item in items)
 
 
 def _status_badge(status: object) -> str:
     if status is None:
-        return '<span class="muted">—</span>'
+        return _DASH_HTML
     text = str(status)
     if text in ("ok", "green", "ACCEPTED", "CALIBRATED", "true"):
         cls = "status-ok"
@@ -715,294 +713,98 @@ def _banner_class(result: str) -> str:
     return "banner-error"
 
 
-def _html_kv_table(rows: list[tuple[str, str]]) -> str:
-    body = "".join(
-        f'<tr><td class="kv-key">{_e(label)}</td><td>{value_html}</td></tr>'
-        for label, value_html in rows
-    )
-    return f'<div class="table-wrap"><table><tbody>{body}</tbody></table></div>'
-
-
-def _html_check_details(name: str, entry: dict) -> str:
-    items = _check_detail_items(name, entry)
+def _html_details(items: list[tuple[str, object]]) -> str:
     if not items:
-        return '<span class="muted">—</span>'
+        return _DASH_HTML
     parts: list[str] = []
     for key, val in items:
         if isinstance(val, list):
-            if val:
-                rendered = ", ".join(f"<code>{_e(item)}</code>" for item in val)
-            else:
-                rendered = '<span class="muted">(none)</span>'
-        elif val is None:
-            rendered = '<span class="muted">—</span>'
-        elif isinstance(val, bool):
-            rendered = f"<code>{_e(_format_scalar(val))}</code>"
+            rendered = _html_list_codes(val) if val else '<span class="muted">(none)</span>'
         else:
-            rendered = f"<code>{_e(val)}</code>"
+            rendered = _html_code_or_dash(None if val is None else _format_scalar(val))
         parts.append(f"<li><strong>{_e(key)}</strong>: {rendered}</li>")
     return f'<ul class="detail-list">{"".join(parts)}</ul>'
 
 
-def render_html(payload: dict) -> str:
-    """Сформировать автономный HTML5-отчёт (без внешних ресурсов) из accept.json / calibrate.json."""
-    kind = detect_report_kind(payload)
-    result = str(payload["result"])
-    policy = payload.get("policy") if kind == "accept" else None
-    mode = payload.get("mode")
-    scope = payload.get("scope")
-    reason_code = payload.get("reason_code")
-    exit_code = payload.get("exit_code")
-    message = payload.get("message")
-    warnings = _warnings_list(payload)
-    repo = _as_dict(payload.get("repo"))
-    inputs = _as_dict(payload.get("inputs"))
-    config_block = inputs.get("config") if isinstance(inputs.get("config"), dict) else None
-    witnessbox_block = payload.get("witnessbox") if isinstance(payload.get("witnessbox"), dict) else None
+def _log_href(log_path: object, log_base: str) -> str | None:
+    """Относительная ссылка на лог прогона (runs/...) или None, если путь не похож на него.
 
-    title_parts = [f"AcceptBox: {result}"]
-    if policy is not None:
-        title_parts.append(f"[policy={policy}]")
-    if reason_code:
-        title_parts.append(f"({reason_code})")
-    title_text = " ".join(title_parts)
+    Ссылка не читает файл: страница остаётся чистой функцией от отчёта.
+    """
+    if not isinstance(log_path, str) or not log_path or "\\" in log_path or ":" in log_path \
+            or log_path.startswith("/") or any(ord(char) < 32 for char in log_path) \
+            or ".." in log_path.split("/"):
+        return None
+    return quote(posixpath.join(log_base, log_path) if log_base else log_path, safe="/")
 
+
+def _html_value(cell: _Cell, log_base: str) -> str:
+    if cell.kind == "codes":
+        return _html_list_codes(cell.value)
+    if cell.kind == "details":
+        return _html_details(cell.value)
+    if cell.kind == "status":
+        return _status_badge(cell.value)
+    if cell.kind == "text":
+        return _DASH_HTML if cell.value is None else _e(cell.value)
+    if cell.kind == "log":
+        href = _log_href(cell.value, log_base)
+        if href is not None:
+            return f'<a href="{_e(href)}"><code>{_e(cell.value)}</code></a>'
+    return _html_code_or_dash(cell.value)  # code и лог без ссылки
+
+
+def _html_section(section: _Section, log_base: str) -> str:
+    if section.kv:
+        body = "".join(
+            f'<tr><td class="kv-key">{_e(row[0].value)}</td>'
+            f"<td>{_html_value(row[1], log_base)}</td></tr>"
+            for row in section.rows)
+        table = f"<table><tbody>{body}</tbody></table>"
+    else:
+        head = "".join(f"<th>{_e(header)}</th>" for header in section.headers)
+        body = "".join(
+            "<tr>" + "".join(f"<td>{_html_value(cell, log_base)}</td>" for cell in row) + "</tr>"
+            for row in section.rows)
+        table = f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    return (f'<section class="card"><h2>{_e(section.title)}</h2>'
+            f'<div class="table-wrap">{table}</div></section>')
+
+
+def render_html(payload: dict, *, log_base: str = "") -> str:
+    """Сформировать автономный HTML5-отчёт (без внешних ресурсов) из accept.json / calibrate.json.
+
+    ``log_base`` — путь от места сохранения страницы до каталога отчёта: ссылки на логи
+    прогонов строятся относительно него (пусто — страница лежит рядом с отчётом).
+    """
+    report = _build_report(payload)
+    title_text = f"AcceptBox: {report.result}"
     badges: list[str] = []
-    if policy is not None:
-        badges.append(f'<span class="badge">[policy={_e(policy)}]</span>')
-    if mode is not None:
-        badges.append(f'<span class="badge">mode={_e(mode)}</span>')
-    if reason_code:
-        badges.append(f'<span class="badge">{_e(reason_code)}</span>')
+    if report.policy is not None:
+        title_text += f" [policy={report.policy}]"
+        badges.append(f'<span class="badge">[policy={_e(report.policy)}]</span>')
+    if report.mode is not None:
+        badges.append(f'<span class="badge">mode={_e(report.mode)}</span>')
+    if report.reason_code:
+        title_text += f" ({report.reason_code})"
+        badges.append(f'<span class="badge">{_e(report.reason_code)}</span>')
+    meta = "".join(
+        f"<span><strong>{label}:</strong> <code>{_e(value)}</code></span>"
+        for label, value in (("Exit code", report.exit_code), ("Scope", report.scope),
+                             ("AcceptBox", report.version))
+        if value is not None)
+    message = ("" if report.message is None
+               else f'<p class="banner-message">{_e(report.message)}</p>')
 
-    meta_items: list[str] = []
-    if exit_code is not None:
-        meta_items.append(f"<span><strong>Exit code:</strong> <code>{_e(exit_code)}</code></span>")
-    if scope is not None:
-        meta_items.append(f"<span><strong>Scope:</strong> <code>{_e(scope)}</code></span>")
-    if payload.get("acceptbox_version") is not None:
-        meta_items.append(
-            f"<span><strong>AcceptBox:</strong> <code>{_e(payload.get('acceptbox_version'))}</code></span>"
-        )
-
-    sections: list[str] = []
-
-    # Баннер вердикта (L31)
-    message_html = (
-        f'<p class="banner-message">{_e(message)}</p>'
-        if message is not None else ""
-    )
-    sections.append(
-        f'<header class="banner {_banner_class(result)}">'
-        f'<h1>{_e(result)} {" ".join(badges)}</h1>'
-        f'<div class="banner-meta">{"".join(meta_items)}</div>'
-        f'{message_html}'
-        f'</header>'
-    )
-
-    # Предупреждения — заметно наверху, никогда не сворачиваются (L31)
-    if warnings:
-        warn_items = "".join(f"<li>{_e(w)}</li>" for w in warnings)
-        sections.append(
-            f'<section class="warnings" aria-label="Warnings">'
-            f'<h2>Warnings ({len(warnings)})</h2>'
-            f'<ul>{warn_items}</ul>'
-            f'</section>'
-        )
-
-    # Репозиторий и коммиты
-    repo_rows: list[tuple[str, str]] = [
-        ("source", _html_code_or_dash(repo.get("source"))),
-        ("base", _html_code_or_dash(repo.get("base"))),
-    ]
-    if kind == "accept":
-        repo_rows.extend([
-            ("repro", _html_code_or_dash(repo.get("repro"))),
-            ("head", _html_code_or_dash(repo.get("head"))),
-            ("head_tree", _html_code_or_dash(repo.get("head_tree"))),
-        ])
-    repo_rows.extend([
-        ("run_id", _html_code_or_dash(payload.get("run_id"))),
-        ("started_at", _html_code_or_dash(payload.get("started_at"))),
-        ("finished_at", _html_code_or_dash(payload.get("finished_at"))),
-    ])
-    sections.append(
-        '<section class="card"><h2>Repository &amp; Commits</h2>'
-        + _html_kv_table(repo_rows)
-        + "</section>"
-    )
-
-    # Входные параметры и конфигурация
-    input_rows: list[tuple[str, str]] = []
-    if config_block is not None:
-        input_rows.extend([
-            ("config.path", _html_code_or_dash(config_block.get("path"))),
-            ("config.commit", _html_code_or_dash(config_block.get("commit"))),
-            ("config.sha256", _html_code_or_dash(config_block.get("sha256"))),
-        ])
-    else:
-        input_rows.append(("config", '<span class="muted">—</span>'))
-
-    if kind == "accept":
-        input_rows.extend([
-            ("base_ref", _html_code_or_dash(inputs.get("base_ref"))),
-            ("strict_refs", _html_code_or_dash(
-                _format_scalar(inputs.get("strict_refs")) if "strict_refs" in inputs else None
-            )),
-            ("repro_source", _html_code_or_dash(inputs.get("repro_source"))),
-        ])
-
-    input_rows.append(("timeout_sec", _html_code_or_dash(inputs.get("timeout_sec"))))
-    if "protect" in inputs:
-        input_rows.append(("protect", _html_list_codes(_as_list(inputs.get("protect")))))
-    if "env_keys" in inputs:
-        input_rows.append(("env_keys", _html_list_codes(_as_list(inputs.get("env_keys")))))
-    if "tests" in inputs:
-        tests_val = inputs.get("tests")
-        input_rows.append(("tests", _html_list_codes(tests_val) if isinstance(tests_val, list) else '<span class="muted">—</span>'))
-    if "command" in inputs:
-        cmd_val = inputs.get("command")
-        input_rows.append((
-            "command",
-            _html_code_or_dash(" ".join(str(x) for x in cmd_val)) if isinstance(cmd_val, list) else '<span class="muted">—</span>',
-        ))
-    if "inv" in inputs:
-        inv_val = inputs.get("inv")
-        input_rows.append(("inv", _html_list_codes(inv_val) if isinstance(inv_val, list) else '<span class="muted">—</span>'))
-
-    ebt_block = inputs.get("ebt")
-    if isinstance(ebt_block, dict):
-        for ebt_key in (
-            "repo",
-            "ref",
-            "sha",
-            "pinned_from_ref",
-            "approved_tree_sha256",
-            "actual_tree_sha256",
-            "spec_sha256",
-            "ref_source",
-            "ref_source_kind",
-        ):
-            if ebt_key in ebt_block:
-                val = ebt_block.get(ebt_key)
-                input_rows.append((
-                    f"ebt.{ebt_key}",
-                    _html_code_or_dash(_format_scalar(val) if val is not None else None),
-                ))
-
-    sections.append(
-        '<section class="card"><h2>Inputs &amp; Configuration</h2>'
-        + _html_kv_table(input_rows)
-        + "</section>"
-    )
-
-    # Блок WitnessBox (если присутствует)
-    if witnessbox_block is not None:
-        wb_rows = [
-            ("version", _html_code_or_dash(witnessbox_block.get("version"))),
-            ("gate_sha256", _html_code_or_dash(witnessbox_block.get("gate_sha256"))),
-            ("checker_sha256", _html_code_or_dash(witnessbox_block.get("checker_sha256"))),
-        ]
-        sections.append(
-            '<section class="card"><h2>WitnessBox</h2>'
-            + _html_kv_table(wb_rows)
-            + "</section>"
-        )
-
-    if kind == "accept":
-        checks = _as_dict(payload.get("checks"))
-        check_trs: list[str] = []
-        for check_name in _ordered_keys(checks, _CHECK_ORDER):
-            entry = _as_dict(checks.get(check_name))
-            check_trs.append(
-                "<tr>"
-                f"<td><code>{_e(check_name)}</code></td>"
-                f"<td>{_status_badge(entry.get('status'))}</td>"
-                f"<td>{_html_check_details(check_name, entry)}</td>"
-                "</tr>"
-            )
-        sections.append(
-            '<section class="card"><h2>Checks</h2>'
-            '<div class="table-wrap"><table>'
-            "<thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead>"
-            f'<tbody>{"".join(check_trs)}</tbody>'
-            "</table></div></section>"
-        )
-
-        runs = _as_dict(payload.get("runs"))
-        run_trs: list[str] = []
-        for run_name in _ordered_keys(runs, _RUN_ORDER):
-            entry = _as_dict(runs.get(run_name))
-            reason_val = entry.get("reason")
-            reason_html = _e(reason_val) if reason_val is not None else '<span class="muted">—</span>'
-            run_trs.append(
-                "<tr>"
-                f"<td><code>{_e(run_name)}</code></td>"
-                f"<td>{_html_code_or_dash(entry.get('commit'))}</td>"
-                f"<td>{_status_badge(entry.get('status'))}</td>"
-                f"<td>{_html_code_or_dash(entry.get('exit_code'))}</td>"
-                f"<td>{_html_code_or_dash(entry.get('duration_ms'))}</td>"
-                f"<td>{reason_html}</td>"
-                f"<td>{_html_code_or_dash(entry.get('log_path'))}</td>"
-                "</tr>"
-            )
-        sections.append(
-            '<section class="card"><h2>Runs</h2>'
-            '<div class="table-wrap"><table>'
-            "<thead><tr>"
-            "<th>Run</th><th>Commit</th><th>Status</th><th>Exit Code</th>"
-            "<th>Duration (ms)</th><th>Reason</th><th>Log Path</th>"
-            "</tr></thead>"
-            f'<tbody>{"".join(run_trs)}</tbody>'
-            "</table></div></section>"
-        )
-
-        cov = payload.get("coverage")
-        if isinstance(cov, dict):
-            cov_rows = [
-                ("checked", _html_list_codes(_as_list(cov.get("checked")))),
-                ("skipped", _html_list_codes(_as_list(cov.get("skipped")))),
-                ("unchecked", _html_list_codes(_as_list(cov.get("unchecked")))),
-            ]
-            sections.append(
-                '<section class="card"><h2>Coverage</h2>'
-                + _html_kv_table(cov_rows)
-                + "</section>"
-            )
-    else:
-        results = _as_list(payload.get("results"))
-        res_trs: list[str] = []
-        for entry in results:
-            item = _as_dict(entry)
-            matched_val = item.get("matched")
-            matched_html = (
-                _status_badge(_format_scalar(matched_val))
-                if matched_val is not None else '<span class="muted">—</span>'
-            )
-            reason_val = item.get("reason")
-            reason_html = _e(reason_val) if reason_val is not None else '<span class="muted">—</span>'
-            res_trs.append(
-                "<tr>"
-                f"<td>{_html_code_or_dash(item.get('commit'))}</td>"
-                f"<td>{_html_code_or_dash(item.get('expected'))}</td>"
-                f"<td>{_status_badge(item.get('status'))}</td>"
-                f"<td>{matched_html}</td>"
-                f"<td>{_html_code_or_dash(item.get('exit_code'))}</td>"
-                f"<td>{_html_code_or_dash(item.get('duration_ms'))}</td>"
-                f"<td>{reason_html}</td>"
-                f"<td>{_html_code_or_dash(item.get('log_path'))}</td>"
-                "</tr>"
-            )
-        sections.append(
-            '<section class="card"><h2>Results</h2>'
-            '<div class="table-wrap"><table>'
-            "<thead><tr>"
-            "<th>Commit</th><th>Expected</th><th>Status</th><th>Matched</th>"
-            "<th>Exit Code</th><th>Duration (ms)</th><th>Reason</th><th>Log Path</th>"
-            "</tr></thead>"
-            f'<tbody>{"".join(res_trs)}</tbody>'
-            "</table></div></section>"
-        )
+    # Баннер вердикта и предупреждения — наверху, не сворачиваются (L31)
+    parts = [f'<header class="banner {_banner_class(report.result)}">'
+             f'<h1>{_e(report.result)} {" ".join(badges)}</h1>'
+             f'<div class="banner-meta">{meta}</div>{message}</header>']
+    if report.warnings:
+        items = "".join(f"<li>{_e(warning)}</li>" for warning in report.warnings)
+        parts.append(f'<section class="warnings" aria-label="Warnings">'
+                     f"<h2>Warnings ({len(report.warnings)})</h2><ul>{items}</ul></section>")
+    parts += [_html_section(section, log_base) for section in report.sections]
 
     return (
         "<!doctype html>\n"
@@ -1015,7 +817,7 @@ def render_html(payload: dict) -> str:
         "</head>\n"
         "<body>\n"
         "<main>\n"
-        + "\n".join(sections)
+        + "\n".join(parts)
         + "\n</main>\n"
         "</body>\n"
         "</html>\n"
