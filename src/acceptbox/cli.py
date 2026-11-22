@@ -6,8 +6,8 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import sys
+import tomllib
 import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory, mkdtemp
@@ -17,8 +17,8 @@ from .command import run_commit as run_command_commit
 from .config import (CONFIG_FILENAME, ConfigError, ProjectConfig,
                      load_config_from_commit, load_config_from_file)
 from .git import (GitError, add_worktree, base_env, changed_paths, clone_no_checkout,
-                  commit_message, ensure_commit, fetch_ref, is_ancestor, merge_base,
-                  probe_git, resolve_repo_head, rev_list_first_parent, rev_parse_tree,
+                  ensure_commit, first_parent_roles, fetch_ref, is_ancestor, merge_base,
+                  probe_git, resolve_repo_head, rev_parse_tree,
                   trusted_ref_source)
 from .inputs import (InputError, build_runtime_env, parse_env_entry, parse_invariants,
                      validate_commit_sha, validate_pathspec, validate_ref,
@@ -28,7 +28,7 @@ from .report import (OutDirLock, OutNotEmptyError, atomic_write_json, completed_
                      skipped_run, utc_now_iso)
 from .verdict import (RunOutcome, Verdict, ancestry_verdict, base_not_on_ref, coverage,
                       evaluate_runs, inputs_untrusted, no_invariants,
-                      protected_paths_verdict, ref_source_local, refactor_ancestry_verdict,
+                      protected_paths_verdict, ref_source_local, base_head_ancestry_verdict,
                       refactor_empty_verdict, repro_ambiguous, repro_tests_verdict, run_verdict)
 from .verdict import error as error_verdict
 from .witnessbox import (WITNESSBOX_SUPPORTED_TEXT, check_witnessbox_installation,
@@ -48,9 +48,6 @@ class _ReproAmbiguous(Exception):
     """Несколько коммитов помечены AcceptBox-Role: repro → repro-ambiguous, код 1."""
 
 
-_ROLE_TRAILER_RE = re.compile(r"^\s*AcceptBox-Role\s*:\s*(.+?)\s*$", re.IGNORECASE)
-
-
 def _resolve_repro_commit(clone: Path, git_env: dict[str, str],
                           base: str, head: str) -> tuple[str | None, str | None]:
     """Авто-резолв --repro в диапазоне base..head (L30):
@@ -58,18 +55,10 @@ def _resolve_repro_commit(clone: Path, git_env: dict[str, str],
     2) иначе первый first-parent коммит в ``base..head``;
     3) если коммитов нет — (None, None).
     """
-    commits = rev_list_first_parent(clone, git_env, base, head)
+    commits = first_parent_roles(clone, git_env, base, head)
     if not commits:
         return None, None
-    marked: list[str] = []
-    for sha in commits:
-        msg = commit_message(clone, git_env, sha)
-        if any(
-            match.group(1).strip().lower() == "repro"
-            for line in msg.splitlines()
-            if (match := _ROLE_TRAILER_RE.match(line)) is not None
-        ):
-            marked.append(sha)
+    marked = [sha for sha, roles in commits if "repro" in roles]
     if len(marked) > 1:
         short = ", ".join(s[:12] for s in marked)
         raise _ReproAmbiguous(
@@ -77,7 +66,38 @@ def _resolve_repro_commit(clone: Path, git_env: dict[str, str],
         )
     if len(marked) == 1:
         return marked[0], "trailer"
-    return commits[0], "first-commit"
+    return commits[0][0], "first-commit"
+
+
+def _spec_invariants(spec_path: Path) -> list[str]:
+    """ID инвариантов ``[inv.*]`` из ebt/spec.toml: область проверки refactor без --inv."""
+    try:
+        spec = tomllib.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as failure:
+        raise _EbtUntrusted(f"ebt/spec.toml не разбирается: {failure}") from failure
+    invariants = spec.get("inv")
+    if not isinstance(invariants, dict) or not invariants:
+        raise _EbtUntrusted("ebt/spec.toml не содержит инвариантов [inv.*]")
+    return sorted(invariants)
+
+
+def _acceptance_warnings(*, pin_from_ref: bool, ebt_ref: str | None, ebt_sha: str | None,
+                         ref_kinds: dict[str, str | None], repro_source: str | None,
+                         repro: str | None) -> list[str]:
+    """Оговорки, меняющие смысл вердикта: печатаются в выводе, а не только в accept.json (L31)."""
+    warnings: list[str] = []
+    if pin_from_ref and ebt_sha is not None:
+        warnings.append(f"ebt/ закреплён по вершине --ebt-ref {ebt_ref!r} ({ebt_sha[:12]}), "
+                        "а не по одобренному --approved-tree (--pin-from-ref)")
+    local_flags = [flag for flag, kind in ref_kinds.items() if kind == "local"]
+    if local_flags:
+        warnings.append(f"{', '.join(local_flags)}: ветка взята из локального репозитория без "
+                        "origin (ref_source_kind=local) — слабая проверка")
+    if repro_source == "first-commit" and repro is not None:
+        warnings.append(f"repro выбран автоматически как первый коммит base..head ({repro[:12]}); "
+                        "если это не репро-коммит, пометьте нужный trailer AcceptBox-Role: repro "
+                        "или передайте --repro")
+    return warnings
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:
@@ -112,7 +132,7 @@ def _validate_config_path(value: str | None) -> Path | None:
         raise InputError("--config: укажите путь к файлу конфигурации")
     if "\x00" in value or any(ord(char) < 32 for char in value):
         raise InputError("--config: недопустимые управляющие символы")
-    return Path(os.path.abspath(os.path.expanduser(value)))
+    return Path(value)  # нормализует load_config_from_file
 
 
 def _remove_empty_dir(path: Path) -> None:
@@ -335,6 +355,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     actual_tree = spec_sha = None
     ebt_ref_source = ebt_ref_kind = None
     findings_inv: list[str] = []
+    spec_invs: list[str] | None = None
     runs = {"base": skipped_run(base, BASE_SKIP_REASON if (mode == "command" and policy == "bugfix") else NOT_RUN_REASON),
             "repro": skipped_run(repro, REFACTOR_REPRO_SKIP_REASON if policy == "refactor" else NOT_RUN_REASON),
             "head": skipped_run(head, NOT_RUN_REASON)}
@@ -349,6 +370,17 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     def finish(verdict: Verdict, coverage_override: dict | None = None) -> int:
         assert out_path is not None
         finished_at = utc_now_iso()
+        if policy == "refactor":
+            scope_invariants = inv_list if inv_list is not None else (spec_invs or [])
+        elif mode == "witnessbox" and inv_list is None:
+            scope_invariants = sorted(set(findings_inv))  # выведены из прогона base (L30)
+        else:
+            scope_invariants = inv_list or []
+        warnings = _acceptance_warnings(
+            pin_from_ref=pin_from_ref, ebt_ref=ebt_ref, ebt_sha=ebt_sha,
+            ref_kinds={"--base-ref": checks["base_ref"].get("ref_source_kind"),
+                       "--ebt-ref": ebt_ref_kind},
+            repro_source=repro_source, repro=repro)
         inputs_block: dict = {
             "timeout_sec": timeout,
             "protect": protect,
@@ -390,17 +422,17 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "reason_code": verdict.reason_code,
             "message": verdict.message,
             "coverage": coverage_override or coverage(
-                mode,
-                sorted(set(findings_inv)) if (mode == "witnessbox" and inv_list is None)
-                else (inv_list or []),
-                findings_inv,
-            ),
+                mode, scope_invariants, findings_inv,
+                all_green=policy == "refactor" and verdict.result == "ACCEPTED"),
+            "warnings": warnings,
         }
         report_path = atomic_write_json(out_path, "accept.json", payload)
         stream = sys.stdout if verdict.exit_code == 0 else sys.stderr
-        print(f"acceptbox: {verdict.result}"
+        print(f"acceptbox: {verdict.result} [policy={policy}]"
               + (f" ({verdict.reason_code})" if verdict.reason_code else "")
               + f": {verdict.message} (отчёт: {report_path})", file=stream)
+        for warning in warnings:
+            print(f"acceptbox: внимание: {warning}", file=stream)
         return verdict.exit_code
 
     # Стадия 2: атомарный захват --out (или создание нового пустого каталога в TMPDIR, L22).
@@ -436,41 +468,19 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         # до чтения .acceptbox.toml из base (L23, L29, L30).
                         clone = temp / "repo"
                         clone_no_checkout(repo, clone, git_env)
-                        if base is not None:
-                            if not ensure_commit(clone, git_env, repo, base):
-                                return finish(error_verdict(
-                                    "gate-error", f"коммит {base} отсутствует в --repo"))
-                            if base_ref is not None:
-                                ref_source, ref_kind = trusted_ref_source(repo, git_env)
-                                checks["base_ref"] = {
-                                    "status": "not-run", "ref": base_ref, "ref_source": ref_source,
-                                    "ref_source_kind": ref_kind, "ref_commit": None}
-                                if strict_refs and ref_kind == "local":
-                                    checks["base_ref"]["status"] = "failed"
-                                    return finish(ref_source_local(
-                                        f"--strict-refs: доверенный источник --base-ref {base_ref!r} "
-                                        f"недоступен (ref_source_kind=local)"))
-                                ref_commit = fetch_ref(clone, git_env, ref_source, base_ref)
-                                checks["base_ref"]["ref_commit"] = ref_commit
-                                checks["base_ref"]["status"] = "failed"
-                                if ref_commit is None:
-                                    return finish(base_not_on_ref(
-                                        f"ссылка --base-ref {base_ref!r} не найдена в {ref_source}"))
-                                if not is_ancestor(clone, git_env, base, ref_commit):
-                                    return finish(base_not_on_ref(
-                                        f"--base {base} не является предком --base-ref {base_ref!r}"
-                                        f" ({ref_source})"))
-                                checks["base_ref"]["status"] = "ok"
-                        else:
-                            assert base_ref is not None and head is not None
-                            if not ensure_commit(clone, git_env, repo, head):
-                                return finish(error_verdict(
-                                    "gate-error", f"коммит {head} отсутствует в --repo"))
+                        # Без --base его вычисляет merge-base доверенной --base-ref и head.
+                        anchor = base if base is not None else head
+                        assert anchor is not None
+                        if not ensure_commit(clone, git_env, repo, anchor):
+                            return finish(error_verdict(
+                                "gate-error", f"коммит {anchor} отсутствует в --repo"))
+                        if base_ref is not None:
                             ref_source, ref_kind = trusted_ref_source(repo, git_env)
                             checks["base_ref"] = {
                                 "status": "not-run", "ref": base_ref, "ref_source": ref_source,
-                                "ref_source_kind": ref_kind, "ref_commit": None,
-                                "resolved_base_auto": True}
+                                "ref_source_kind": ref_kind, "ref_commit": None}
+                            if base is None:
+                                checks["base_ref"]["resolved_base_auto"] = True
                             if strict_refs and ref_kind == "local":
                                 checks["base_ref"]["status"] = "failed"
                                 return finish(ref_source_local(
@@ -482,12 +492,19 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             if ref_commit is None:
                                 return finish(base_not_on_ref(
                                     f"ссылка --base-ref {base_ref!r} не найдена в {ref_source}"))
-                            base = merge_base(clone, git_env, ref_commit, head)
                             if base is None:
+                                base = merge_base(clone, git_env, ref_commit, anchor)
+                                if base is None:
+                                    return finish(base_not_on_ref(
+                                        f"нет общего предка у --base-ref {base_ref!r} "
+                                        f"и --head {anchor}"))
+                                runs["base"]["commit"] = base
+                            elif not is_ancestor(clone, git_env, base, ref_commit):
                                 return finish(base_not_on_ref(
-                                    f"нет общего предка у --base-ref {base_ref!r} и HEAD {head}"))
-                            runs["base"]["commit"] = base
+                                    f"--base {base} не является предком --base-ref {base_ref!r}"
+                                    f" ({ref_source})"))
                             checks["base_ref"]["status"] = "ok"
+                        assert base is not None
                         try:
                             if config_path is not None:
                                 project_config = load_config_from_file(config_path)
@@ -647,8 +664,13 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                     "status": "failed", "reason": str(untrusted), **ref_info}
                                 return finish(inputs_untrusted(str(untrusted)))
                             ebt_sha = resolved_ebt_sha
-                            if pin_from_ref:
-                                approved_tree = actual_tree
+                            if policy == "refactor" and inv_list is None:
+                                try:
+                                    spec_invs = _spec_invariants(ebt_dir / "spec.toml")
+                                except _EbtUntrusted as untrusted:
+                                    checks["ebt_trust"] = {
+                                        "status": "failed", "reason": str(untrusted), **ref_info}
+                                    return finish(inputs_untrusted(str(untrusted)))
                             checks["ebt_trust"] = {
                                 "status": "ok", "actual_tree_sha256": actual_tree,
                                 "spec_sha256": spec_sha, **ref_info}
@@ -659,7 +681,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             if not is_ancestor(clone, git_env, base, head):
                                 checks["ancestry"] = {"status": "failed",
                                                       "base_ancestor_of_head": False}
-                                return finish(refactor_ancestry_verdict(
+                                return finish(base_head_ancestry_verdict(
                                     base_ancestor_of_head=False))
                             try:
                                 auto_repro, auto_source = _resolve_repro_commit(
@@ -685,7 +707,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             ancestry = {
                                 "base_ancestor_of_head": is_ancestor(clone, git_env, base, head),
                             }
-                            verdict = refactor_ancestry_verdict(**ancestry)
+                            verdict = base_head_ancestry_verdict(**ancestry)
                         checks["ancestry"] = {"status": "ok" if verdict is None else "failed",
                                                **ancestry}
                         if verdict is not None:

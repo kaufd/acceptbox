@@ -31,7 +31,12 @@ class Verdict:
     message: str
 
 
-def accepted() -> Verdict:
+def accepted(policy: str = "bugfix") -> Verdict:
+    if policy == "refactor":
+        # Человек видит только строку вывода: смысл refactor-приёмки должен быть в ней (L31).
+        return Verdict("ACCEPTED", 0, None,
+                       "регрессий по существующим проверкам нет; "
+                       "сохранение поведения не проверяется (policy=refactor)")
     return Verdict("ACCEPTED", 0, None, "все условия приёмки выполнены")
 
 
@@ -75,8 +80,8 @@ def ancestry_verdict(*, base_ancestor_of_repro: bool,
     return None
 
 
-def refactor_ancestry_verdict(*, base_ancestor_of_head: bool) -> Verdict | None:
-    """Стадия 7 (policy=refactor, L24/L30): base должен быть предком head."""
+def base_head_ancestry_verdict(*, base_ancestor_of_head: bool) -> Verdict | None:
+    """Стадия 7 (policy=refactor и авто-резолв --repro, L30): base должен быть предком head."""
     if not base_ancestor_of_head:
         return rejected("head-not-descendant",
                         "base не является предком head: ancestry base → head нарушена")
@@ -175,15 +180,20 @@ def evaluate_runs(runs: list[tuple[str, RunOutcome]], *,
         verdict = run_verdict(run_name, outcome, policy=policy)
         if verdict is not None:
             return verdict
-    return accepted()
+    return accepted(policy)
 
 
 def coverage(mode: str, invariants: list[str],
-             findings_inv: list[str] | None = None) -> dict:
+             findings_inv: list[str] | None = None, *, all_green: bool = False) -> dict:
     """Охват приёмки (L11): проверенные инварианты, пропущенные проверки,
-    непроверенные требования."""
+    непроверенные требования.
+
+    ``all_green`` — refactor принят: все инварианты области прошли на base и head (L31).
+    """
     if mode != "witnessbox" or not invariants:
         return {"checked": [], "skipped": [], "unchecked": list(invariants)}
+    if all_green:
+        return {"checked": list(invariants), "skipped": [], "unchecked": []}
     found = set(findings_inv or [])
     checked = [inv for inv in invariants if inv in found]
     return {"checked": checked, "skipped": [],

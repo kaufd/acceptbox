@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -217,28 +218,32 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
 def load_config_from_file(config_path: Path) -> ProjectConfig:
     """Прочитать внешний конфиг ``--config <path>`` с диска (fail-closed, L30).
 
-    Отклоняет отсутствующий путь, симлинки, каталоги и ошибки схемы → ConfigError.
+    Отклоняет отсутствующий путь, симлинки, не-обычные файлы и ошибки схемы → ConfigError.
+    O_NOFOLLOW и fstat по открытому дескриптору: без гонки между проверкой и чтением;
+    O_NONBLOCK — чтобы FIFO не подвесил открытие.
     """
-    resolved = Path(os.path.abspath(os.path.expanduser(str(config_path))))
-    path_str = str(resolved)
-    if resolved.is_symlink():
-        error = ConfigError(f"--config {path_str}: симлинк не допускается")
+    path_str = os.path.abspath(os.path.expanduser(str(config_path)))
+
+    def reject(message: str) -> ConfigError:
+        error = ConfigError(f"--config {path_str}: {message}")
         error.path = path_str
-        raise error
-    if not resolved.exists():
-        error = ConfigError(f"--config {path_str}: файл не найден")
-        error.path = path_str
-        raise error
-    if not resolved.is_file():
-        error = ConfigError(f"--config {path_str}: должен быть обычным файлом")
-        error.path = path_str
-        raise error
+        return error
+
     try:
-        raw = resolved.read_bytes()
+        descriptor = os.open(path_str, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as missing:
+        raise reject("файл не найден") from missing
     except OSError as io_error:
-        error = ConfigError(f"--config {path_str}: не удалось прочитать файл: {io_error}")
-        error.path = path_str
-        raise error from io_error
+        if os.path.islink(path_str):
+            raise reject("симлинк не допускается") from io_error
+        raise reject(f"не удалось открыть файл: {io_error}") from io_error
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise reject("должен быть обычным файлом")
+        try:
+            raw = handle.read()
+        except OSError as io_error:
+            raise reject(f"не удалось прочитать файл: {io_error}") from io_error
     try:
         return parse_config(raw, commit_sha=None, source_path=path_str)
     except ConfigError as error:

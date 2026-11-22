@@ -70,10 +70,10 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 - `--mode`: из `.acceptbox.toml` или `command`.
 - `--repo`: `.`.
 - `--base`: если опущен, требуется `--base-ref <ветка>` — автоматически вычисляется `git merge-base <доверенная ветка> <head>` до чтения `.acceptbox.toml` из этого `base`.
-- `--repro` (в политике `bugfix`): если опущен, автоматически выбирается единственный коммит в `base..head` с trailer `AcceptBox-Role: repro` (несколько → `repro-ambiguous`), иначе первый first-parent коммит в `base..head` (`inputs.repro_source`: `"explicit" | "trailer" | "first-commit"`). Запрещён в политике `refactor`.
+- `--repro` (в политике `bugfix`): если опущен, автоматически выбирается единственный коммит в `base..head` с trailer `AcceptBox-Role: repro` (несколько → `repro-ambiguous`), иначе первый first-parent коммит в `base..head` (`inputs.repro_source`: `"explicit" | "trailer" | "first-commit"`). Учитывается только блок trailers коммита (разбирает `git`); строка роли в теле сообщения игнорируется. О запасном варианте `first-commit` CLI выводит предупреждение. Запрещён в политике `refactor`.
 - `--head`: `HEAD` из `--repo`, резолвится в полный SHA сразу после проверки `git` (сбой даёт `gate-error` с отчётом). Явно переданный `--head` принимается только как полный 40/64-hex SHA. **Важно:** незакоммиченные правки рабочего дерева не проверяются; если `--repo` указан как URL, без `--head` через `git ls-remote` берётся удалённый `HEAD` (обычно ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно).
 - `--ebt-repo` (режим `witnessbox`): из `[witnessbox].ebt_repo` или `--repo`.
-- `--pin-from-ref` (режим `witnessbox`, только CLI): берёт `--ebt-sha` с вершины доверенной `--ebt-ref` и вычисляет `--approved-tree` напрямую из её Git-объектов (нельзя совмещать с `--ebt-sha` и `--approved-tree`).
+- `--pin-from-ref` (режим `witnessbox`, только CLI): берёт `--ebt-sha` с вершины доверенной `--ebt-ref` и читает дерево `ebt/` напрямую из её Git-объектов (нельзя совмещать с `--ebt-sha` и `--approved-tree`). Дерево закреплено, но не одобрено владельцем: в отчёте `approved_tree_sha256: null` и `pinned_from_ref: true` (хеш — в `actual_tree_sha256`), а CLI выводит предупреждение.
 - `--inv` (режим `witnessbox`): опциональный. Если опущен, прогоняется вся спецификация `ebt/spec.toml`: в политике `bugfix` нарушенные на `base` инварианты (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) определяются автоматически и `repro` обязан упасть хотя бы по одному из тех же инвариантов, после чего `head` проходит; в политике `refactor` вся спецификация должна быть зелёной на `base` и `head`. Явно пустой `--inv ""` по-прежнему отклоняется с `no-invariants`.
 - `--timeout`: из `.acceptbox.toml` или `600` секунд.
 - `--out`: атомарно создаёт новый пустой каталог в системном `TMPDIR` и печатает путь к `accept.json`. При явном `--out` каталог должен отсутствовать или быть пустым (блокировка `O_EXCL`).
@@ -88,11 +88,23 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 ### Политики приёмки (`--policy bugfix` и `--policy refactor`)
 
 - **`--policy bugfix` (по умолчанию, только CLI):** проверяет цепочку `base → repro → head` (`--repro` авто-резолвится из `base..head`, если опущен; `repro` красный, `head` зелёный; в `witnessbox` также `base` красный, а `repro` падает по тем же инвариантам).
-- **`--policy refactor` (только CLI, L24/L30):** запрещает `--repro`, работает в обоих режимах (`command` и `witnessbox`), проверяет ancestry `base → head` (`head-not-descendant`) и непустоту `base..head` (`refactor-empty`), автоматически защищает `.acceptbox.toml` плюс `[command].tests` (в `command`) или `ebt`/`tool/ebt_check` (в `witnessbox`) в `base..head` и требует, чтобы **оба** коммита `base` (`base-not-green`) и `head` (`head-not-green`) прошли (`green`).
+- **`--policy refactor` (только CLI, L24/L30):** запрещает `--repro`, работает в обоих режимах (`command` и `witnessbox`), проверяет ancestry `base → head` (`head-not-descendant`) и непустоту `base..head` (`refactor-empty`), автоматически защищает `.acceptbox.toml` плюс `[command].tests` (в `command`) или `ebt`/`tool/ebt_check` (в `witnessbox`) в `base..head` и требует, чтобы **оба** коммита `base` (`base-not-green`) и `head` (`head-not-green`) прошли (`green`). **`ACCEPTED` в политике `refactor` означает «регрессий по существующим проверкам нет»; сохранение поведения не проверяется** — это сказано в самом сообщении вердикта. В режиме `witnessbox` `coverage.checked` перечисляет все инварианты области (`--inv` или все `[inv.*]` из `ebt/spec.toml`); спецификация без инвариантов — `inputs-untrusted`.
 
 ```sh
 acceptbox accept --policy refactor --base-ref main
 ```
+
+### Вывод CLI
+
+Человек читает итоговую строку, а не `accept.json`, поэтому всё, что меняет смысл вердикта, выводится в ней (L31):
+
+```text
+acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим проверкам нет; сохранение поведения не проверяется (policy=refactor) (отчёт: /tmp/.../accept.json)
+acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref 'main' (1a2b3c4d5e6f), а не по одобренному --approved-tree (--pin-from-ref)
+```
+
+- `[policy=…]` выводится после результата всегда.
+- Строки `acceptbox: внимание: …` добавляются при: `--pin-from-ref` (`ebt/` закреплён, а не одобрен), `ref_source_kind: "local"` у `--base-ref` / `--ebt-ref` (слабая проверка) и автоматически выбранном repro (`first-commit`). Те же тексты сохраняются в `accept.json` → `warnings`.
 
 ### Режим `command`
 
@@ -209,7 +221,7 @@ acceptbox calibrate \
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` не найдена, `--ebt-sha` не предок `--ebt-ref`, хеш `ebt/` ≠ `--approved-tree` или нет `ebt/spec.toml` |
 | `repro-not-descendant` | `accept` (`bugfix`) | `base` не является предком `repro` |
 | `repro-not-ancestor` | `accept` (`bugfix`) | `repro` не является предком `head` |
-| `head-not-descendant` | `accept` (`refactor`) | `base` не является предком `head` |
+| `head-not-descendant` | `accept` (`refactor`; `bugfix` с авто-резолвом `--repro`) | `base` не является предком `head` |
 | `protected-paths-changed` | `accept` | Защищённый путь (`.acceptbox.toml`, `protect`, `[command].tests` в `refactor` или `ebt`/`tool/ebt_check` в `witnessbox`) изменён |
 | `repro-empty` | `accept` (`bugfix` + `command`) | Дифф `base..repro` пуст (или нет коммитов в `base..head` при авто-резолве) |
 | `repro-ambiguous` | `accept` (`bugfix`, авто-`repro`) | Несколько коммитов в `base..head` помечены `AcceptBox-Role: repro` |

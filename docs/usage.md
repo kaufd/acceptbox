@@ -70,10 +70,10 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - `--mode`: from `.acceptbox.toml`, or `command`.
 - `--repo`: `.`.
 - `--base`: if omitted, requires `--base-ref <ref>` and automatically resolves `git merge-base <trusted ref> <head>` before loading `.acceptbox.toml` from that `base`.
-- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Forbidden in `refactor` policy.
+- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Only the commit's trailer block counts (parsed by `git`); a role line inside the message body is ignored. The `first-commit` fallback is announced by a CLI warning. Forbidden in `refactor` policy.
 - `--head`: `HEAD` of `--repo`, resolved to a full SHA immediately after checking `git` (failure produces `gate-error` with a report). An explicitly passed `--head` must be a full 40/64-hex SHA. **Note:** uncommitted working-tree edits are never tested; when `--repo` is a URL, omitting `--head` resolves remote `HEAD` via `git ls-remote` (usually the default branch, not a feature branch — pass `--head` explicitly for URLs).
 - `--ebt-repo` (`witnessbox` mode): from `[witnessbox].ebt_repo`, or `--repo`.
-- `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and computes `--approved-tree` directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`).
+- `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and reads the `ebt/` tree directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`). The tree is pinned, not owner-approved: the report records `approved_tree_sha256: null` with `pinned_from_ref: true` (the hash is in `actual_tree_sha256`), and the CLI prints a warning.
 - `--inv` (`witnessbox` mode): optional. When omitted, runs the full `ebt/spec.toml` suite: in `bugfix` policy, any violated invariant (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) on `base` is inferred automatically and `repro` must fail on at least one of those same invariants before `head` passes; in `refactor` policy, all invariants must pass on both `base` and `head`. Passing an explicit empty `--inv ""` still rejects with `no-invariants`.
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
@@ -88,11 +88,23 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 ### Policies (`--policy bugfix` vs `--policy refactor`)
 
 - **`--policy bugfix` (default, CLI-only):** verifies `base → repro → head` (`--repro` is auto-resolved from `base..head` if omitted; `repro` red, `head` green; in `witnessbox` mode `base` must also be red and `repro` must fail on the same invariant(s)).
-- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`).
+- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`). **`ACCEPTED` under `refactor` means no regressions against the existing checks; behaviour preservation is not verified** — the verdict message says so itself. In `witnessbox` mode `coverage.checked` lists every invariant in scope (`--inv`, or all `[inv.*]` of `ebt/spec.toml`); a spec without invariants is `inputs-untrusted`.
 
 ```sh
 acceptbox accept --policy refactor --base-ref main
 ```
+
+### CLI output
+
+The summary line is what a human actually reads, so everything that changes the meaning of the verdict is printed there, not only in `accept.json` (L31):
+
+```text
+acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим проверкам нет; сохранение поведения не проверяется (policy=refactor) (отчёт: /tmp/.../accept.json)
+acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref 'main' (1a2b3c4d5e6f), а не по одобренному --approved-tree (--pin-from-ref)
+```
+
+- `[policy=…]` is always printed after the result.
+- `acceptbox: внимание: …` lines follow for: `--pin-from-ref` (pinned, not approved `ebt/`), `ref_source_kind: "local"` for `--base-ref` / `--ebt-ref` (weak check), and an auto-picked `first-commit` repro. The same texts are stored in `accept.json` → `warnings`.
 
 ### `command` mode
 
@@ -209,7 +221,7 @@ acceptbox calibrate \
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` missing, `--ebt-sha` not ancestor of `--ebt-ref`, `ebt/` hash ≠ `--approved-tree`, or `ebt/spec.toml` missing |
 | `repro-not-descendant` | `accept` (`bugfix`) | `base` is not an ancestor of `repro` |
 | `repro-not-ancestor` | `accept` (`bugfix`) | `repro` is not an ancestor of `head` |
-| `head-not-descendant` | `accept` (`refactor`) | `base` is not an ancestor of `head` |
+| `head-not-descendant` | `accept` (`refactor`; `bugfix` with auto-resolved `--repro`) | `base` is not an ancestor of `head` |
 | `protected-paths-changed` | `accept` | A protected path (`.acceptbox.toml`, `protect`, `[command].tests` in `refactor`, or `ebt`/`tool/ebt_check` in `witnessbox`) changed |
 | `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty (or no commits in `base..head` on auto-resolve) |
 | `repro-ambiguous` | `accept` (`bugfix`, auto-repro) | Multiple commits in `base..head` carry `AcceptBox-Role: repro` |

@@ -119,3 +119,14 @@ Documented limitation without code change: when `--ebt-repo` is a local checkout
   - `--inv` becomes optional in `witnessbox` mode (`accept` and `calibrate`): when omitted, AcceptBox runs the full `ebt/spec.toml`, infers the violated invariant(s) on `base`, requires `repro` to fail on at least one of those same invariant(s), and requires `head` to pass (`green`); explicit empty `--inv ""` still returns `no-invariants`.
   - `--config <path>` (CLI-only on `accept` and `calibrate`): loads the format-`1` project config from an external regular file (rejecting symlinks/missing files with `config-invalid`, exit `2`) instead of `base:.acceptbox.toml`, enabling zero-footprint local usage without committing AcceptBox files to the target repository. Demonstrated in `example/`.
 Revisit if: reusable GitHub Actions become needed alongside the local workflow.
+
+## L31 — Threat model: non-adversarial agent; verdict meaning in CLI output (clarifies L29, L30)
+2026-11-22. Accepted by owner.
+- **Threat model:** the agent under test may err, hallucinate, or cut corners, but does not deliberately attack the host (moving local branches, rewriting `.git/config`, editing external config files to cheat). Checks target accidental failure modes; bypasses that need deliberate tampering are out of scope. Full adversarial resistance means running in CI with URL sources and `--strict-refs`. Hence `--pin-from-ref` and `--config` (L30) get no extra anti-tamper restrictions; the L29 trust boundary stays documented.
+- **The CLI output carries the verdict's meaning:** a human reads the summary line, not `accept.json`. The line always shows `[policy=…]`; `ACCEPTED` under `refactor` says in its message that there are no regressions against existing checks and behaviour preservation is not verified. Lines `acceptbox: внимание: …` follow for `--pin-from-ref`, `ref_source_kind: "local"` of `--base-ref`/`--ebt-ref`, and an auto-picked `first-commit` repro; the same texts go to `accept.json` → `warnings` (additive key, format stays `1`).
+- **`--pin-from-ref`:** `inputs.ebt.approved_tree_sha256` is `null` (pinned is not approved); the hash is in `actual_tree_sha256`.
+- **`--policy refactor` in `witnessbox` mode:** on `ACCEPTED`, `coverage.checked` lists every invariant in scope (`--inv`, or all `[inv.*]` of `ebt/spec.toml` when omitted); with `--inv` omitted, a spec without invariants is `inputs-untrusted`.
+- **`AcceptBox-Role`** is read only from the commit's trailer block (parsed by `git`); a matching line in the body is ignored.
+- **`--config`** is opened with `O_NOFOLLOW | O_NONBLOCK` and checked as a regular file via `fstat`, with no check-then-read race.
+- **Auto-resolved `--repro`:** if `base` is not an ancestor of `head`, the reason is `head-not-descendant` (as in `refactor`).
+Revisit if: the agent must be treated as adversarial — then `--pin-from-ref` should require a non-`local` ref source and `--config` should be restricted.

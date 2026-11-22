@@ -346,6 +346,9 @@ class TestRefactorPolicyWitnessbox(unittest.TestCase):
             self.assertEqual(data["policy"], "refactor")
             self.assertEqual(data["runs"]["base"]["status"], "green")
             self.assertEqual(data["runs"]["head"]["status"], "green")
+            # Without --inv the whole spec was checked, and coverage says so.
+            self.assertEqual(data["coverage"], {"checked": ["INV-1"], "skipped": [], "unchecked": []})
+            self.assertEqual(data["warnings"], [])
 
     def test_witnessbox_refactor_rejects_explicit_empty_inv_and_red_head(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -422,6 +425,9 @@ class TestLocalAutoResolve(unittest.TestCase):
             self.assertEqual(data["repo"]["head"], head)
             self.assertEqual(data["inputs"]["repro_source"], "first-commit")
             self.assertTrue(data["checks"]["base_ref"]["resolved_base_auto"])
+            # The human sees the policy and the auto-picked repro in the CLI output itself.
+            self.assertIn("acceptbox: ACCEPTED [policy=bugfix]", res.stdout)
+            self.assertIn("acceptbox: внимание: repro выбран автоматически", res.stdout)
 
     def test_bugfix_repro_trailer_and_ambiguous_trailer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -444,7 +450,8 @@ class TestLocalAutoResolve(unittest.TestCase):
             _commit(repo, "base")
             _git(repo, "checkout", "-q", "-b", "fix/trailer")
             (repo / "tests" / "helper.py").write_text("VAL = 5\n", encoding="utf-8")
-            _commit(repo, "test: add helper")
+            # The role line in a body paragraph is not a trailer and must not count.
+            _commit(repo, "test: add helper\n\nAcceptBox-Role: repro\ngoes on the next commit.\n\nProse.")
             (repo / "tests" / "test_app.py").write_text(
                 "import unittest\nfrom app import add\nfrom tests.helper import VAL\n"
                 "class T(unittest.TestCase):\n"
@@ -498,7 +505,15 @@ class TestLocalAutoResolve(unittest.TestCase):
             self.assertEqual(data["repo"]["base"], fx["base"])
             self.assertTrue(data["inputs"]["ebt"]["pinned_from_ref"])
             self.assertEqual(data["inputs"]["ebt"]["sha"], fx["ebt_sha"])
-            self.assertEqual(data["inputs"]["ebt"]["approved_tree_sha256"], fx["approved_tree"])
+            # Pinned, not approved: no approved hash is claimed in the report.
+            self.assertIsNone(data["inputs"]["ebt"]["approved_tree_sha256"])
+            self.assertEqual(data["inputs"]["ebt"]["actual_tree_sha256"], fx["approved_tree"])
+            self.assertEqual(data["coverage"]["checked"], ["INV-1"])
+            self.assertIn("acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим "
+                          "проверкам нет; сохранение поведения не проверяется", res.stdout)
+            self.assertIn("acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref", res.stdout)
+            self.assertIn("--base-ref, --ebt-ref: ветка взята из локального репозитория",
+                          res.stdout)
 
     def test_witnessbox_bugfix_infers_invariant_from_base_and_rejects_mismatch_on_repro(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:

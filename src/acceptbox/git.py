@@ -305,16 +305,20 @@ def merge_base(repo: Path, env: dict[str, str], commit_a: str, commit_b: str) ->
     raise GitError(f"{message}: {detail[-1]}" if detail else message)
 
 
-def rev_list_first_parent(repo: Path, env: dict[str, str], base: str, head: str) -> list[str]:
-    """Хронологический список first-parent коммитов в диапазоне ``base..head``."""
-    output = run_git(repo, env, "rev-list", "--first-parent", "--reverse", f"{base}..{head}")
-    return [line.strip().lower() for line in output.decode("ascii", "replace").splitlines()
-            if line.strip()]
-
-
-def commit_message(repo: Path, env: dict[str, str], sha: str) -> str:
-    """Полное сообщение коммита (для разбора trailer ``AcceptBox-Role: repro``)."""
-    return run_git(repo, env, "show", "-s", "--format=%B", sha).decode("utf-8", "replace")
+def first_parent_roles(repo: Path, env: dict[str, str], base: str,
+                       head: str) -> list[tuple[str, list[str]]]:
+    """First-parent коммиты ``base..head`` по порядку и значения их trailer
+    ``AcceptBox-Role`` — только из блока trailers (разбор git), одним вызовом."""
+    output = run_git(repo, env, "log", "--no-show-signature", "--first-parent", "--reverse",
+                     "--format=%H %(trailers:key=AcceptBox-Role,valueonly,unfold,separator=%x2C)",
+                     f"{base}..{head}")
+    commits: list[tuple[str, list[str]]] = []
+    for line in output.decode("utf-8", "replace").splitlines():
+        sha, _, roles = line.strip().partition(" ")
+        if sha:
+            commits.append((sha.lower(), [role.strip().lower() for role in roles.split(",")
+                                          if role.strip()]))
+    return commits
 
 
 def changed_paths(repo: Path, env: dict[str, str], older: str, newer: str,
