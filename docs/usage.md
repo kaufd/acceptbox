@@ -200,9 +200,25 @@ acceptbox calibrate \
 - **No report written:** CLI syntax errors, `out-not-empty`, and missing required arguments (`--tests`, command after `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) or cross-mode flag mixing discovered after reading `base:.acceptbox.toml`. If the current invocation created an empty `--out` directory, it is removed.
 - **Report written atomically** (and its path printed to `stderr`) for all other exit-code-`2` errors after acquiring `--out`: `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, and `gate-error`.
 
-## Development and building
+## Development, building, and releasing
 
 ```sh
 python3 -m unittest discover -s tests
-uv build
+python3 tests/release_check.py
 ```
+
+`tests/release_check.py` builds the sdist and wheel from it, verifies stdlib-only imports and version consistency, runs the full test suite from the unpacked sdist (zero skips), confirms byte-identical wheel rebuilding, tests the installed wheel in a clean venv, and writes `build/release/<version>/release.json` and `SHA256SUMS`.
+
+### Release workflow (GitHub Actions)
+
+1. Bump `version` in `pyproject.toml` and fallback `__version__` in `src/acceptbox/__init__.py`, merge to `main`.
+2. Tag and push: `git tag -a v<version> -m "AcceptBox <version>" && git push origin v<version>`.
+   The [Release](../.github/workflows/release.yml) workflow runs `tests/release_check.py` and creates a GitHub **prerelease** with the wheel, sdist, `release.json`, and `SHA256SUMS` attached. (You can also run it manually via `gh workflow run release.yml -f tag=v<version>`.)
+3. Publish the verified artifacts to PyPI (OIDC Trusted Publishing; builds nothing and verifies SHA-256 against `release.json`):
+   ```sh
+   gh workflow run publish.yml -f tag=v<version>
+   ```
+4. Verify the PyPI install (`uv tool install acceptbox==<version> && acceptbox --installation`) and promote the GitHub Release:
+   ```sh
+   gh release edit v<version> --prerelease=false --latest
+   ```

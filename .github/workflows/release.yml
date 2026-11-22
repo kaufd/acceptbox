@@ -1,0 +1,118 @@
+# Build, verify, and create a GitHub prerelease for a version tag (e.g. v0.2.0).
+# Publishing to PyPI is handled separately by publish.yml, which downloads the exact
+# artifacts attached to this GitHub Release and verifies their SHA-256 against release.json.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, for example v0.2.0"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    name: Build, verify, and create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve and validate tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9][a-zA-Z0-9.]*$ ]]; then
+            echo "Invalid release tag: $TAG (expected v<version>, e.g. v0.2.0)" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure GitHub Release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG already exists; refusing to overwrite" >&2
+            exit 1
+          fi
+
+      - name: Check out tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.meta.outputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Install WitnessBox CLI for full release-check e2e tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv tool install 'witnessbox>=0.10.0'
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
+
+      - name: Run release-check (build sdist/wheel, sdist tests, wheel smoke, release.json)
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/release_check.py --expected-version "$VERSION"
+
+      - name: Create GitHub prerelease with verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="build/release/$VERSION"
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "AcceptBox $VERSION" \
+            --generate-notes \
+            "$out/dist/acceptbox-$VERSION-py3-none-any.whl" \
+            "$out/dist/acceptbox-$VERSION.tar.gz" \
+            "$out/release.json" \
+            "$out/SHA256SUMS"
+
+          {
+            echo "## AcceptBox $VERSION prerelease created"
+            echo ""
+            echo '```'
+            cat "$out/SHA256SUMS"
+            echo '```'
+            echo ""
+            echo "Next steps:"
+            echo "1. Publish to PyPI: \`gh workflow run publish.yml -f tag=$TAG\`"
+            echo "2. Verify PyPI install and promote release: \`gh release edit $TAG --prerelease=false --latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
