@@ -322,11 +322,18 @@ def first_parent_roles(repo: Path, env: dict[str, str], base: str,
 
 
 def changed_paths(repo: Path, env: dict[str, str], older: str, newer: str,
-                  pathspecs: list[str] | None = None) -> list[str]:
+                  pathspecs: list[str] | None = None, *,
+                  diff_filter: str | None = None) -> list[str]:
     """Пути, изменённые между деревьями двух коммитов; ``--no-renames``:
     переименование распадается в удаление старого пути и добавление нового.
+
+    ``diff_filter`` ограничивает типы изменений (``git diff --diff-filter``):
+    ``"a"`` — все изменения, кроме добавлений; ``"A"`` — только добавления.
     """
-    args = ["-c", "diff.renames=false", "diff", "--name-only", "--no-renames", "-z", older, newer]
+    args = ["-c", "diff.renames=false", "diff", "--name-only", "--no-renames"]
+    if diff_filter:
+        args.append(f"--diff-filter={diff_filter}")
+    args += ["-z", older, newer]
     if pathspecs:
         args += ["--", *pathspecs]
     output = run_git(repo, env, *args)

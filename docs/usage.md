@@ -14,7 +14,7 @@ Prints format-`1` JSON containing:
 - `format`: `1`
 - `report_format`: `1`
 - `distribution`: `"acceptbox"`
-- `version`: installed version (e.g. `"0.4.0"`)
+- `version`: installed version (e.g. `"0.5.0"`)
 - `git`: status (`"ok" | "missing" | "error"`), path, version
 - `witnessbox`: path, version, `supported: ">=0.10.0"`, status (`"compatible" | "missing" | "incompatible" | "error"`)
 
@@ -70,11 +70,11 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - `--mode`: from `.acceptbox.toml`, or `command`.
 - `--repo`: `.`.
 - `--base`: if omitted, requires `--base-ref <ref>` and automatically resolves `git merge-base <trusted ref> <head>` before loading `.acceptbox.toml` from that `base`.
-- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Only the commit's trailer block counts (parsed by `git`); a role line inside the message body is ignored. The `first-commit` fallback is announced by a CLI warning. Forbidden in `refactor` policy.
+- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Only the commit's trailer block counts (parsed by `git`); a role line inside the message body is ignored. The `first-commit` fallback is announced by a CLI warning. Forbidden in `refactor` and `feature` policies (exit code `2`).
 - `--head`: `HEAD` of `--repo`, resolved to a full SHA immediately after checking `git` (failure produces `gate-error` with a report). An explicitly passed `--head` must be a full 40/64-hex SHA. **Note:** uncommitted working-tree edits are never tested; when `--repo` is a URL, omitting `--head` resolves remote `HEAD` via `git ls-remote` (usually the default branch, not a feature branch — pass `--head` explicitly for URLs).
 - `--ebt-repo` (`witnessbox` mode): from `[witnessbox].ebt_repo`, or `--repo`.
 - `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and reads the `ebt/` tree directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`). The tree is pinned, not owner-approved: the report records `approved_tree_sha256: null` with `pinned_from_ref: true` (the hash is in `actual_tree_sha256`), and the CLI prints a warning.
-- `--inv` (`witnessbox` mode): optional. When omitted, runs the full `ebt/spec.toml` suite: in `bugfix` policy, any violated invariant (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) on `base` is inferred automatically and `repro` must fail on at least one of those same invariants before `head` passes; in `refactor` policy, all invariants must pass on both `base` and `head`. Passing an explicit empty `--inv ""` still rejects with `no-invariants`.
+- `--inv` (`witnessbox` mode): optional. When omitted, runs the full `ebt/spec.toml` suite: in `bugfix` policy, any violated invariant (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) on `base` is inferred automatically and `repro` must fail on at least one of those same invariants before `head` passes; in `refactor` policy, all invariants must pass on both `base` and `head`; in `feature` policy, all invariants in scope must pass on `head`. Passing an explicit empty `--inv ""` still rejects with `no-invariants`.
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
 
@@ -85,13 +85,20 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Pass `--strict-refs` (CLI-only, recommended in CI) to reject `"local"` fallback fail-closed with `ref-source-local` (exit code `1`). In `command` mode, `--strict-refs` requires `--base-ref`. Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
 - **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI) / pass URLs for `--repo` and `--ebt-repo`.
 
-### Policies (`--policy bugfix` vs `--policy refactor`)
+### Policies (`--policy bugfix`, `refactor`, `feature`)
 
 - **`--policy bugfix` (default, CLI-only):** verifies `base → repro → head` (`--repro` is auto-resolved from `base..head` if omitted; `repro` red, `head` green; in `witnessbox` mode `base` must also be red and `repro` must fail on the same invariant(s)).
 - **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`). **`ACCEPTED` under `refactor` means no regressions against the existing checks; behaviour preservation is not verified** — the verdict message says so itself. In `witnessbox` mode `coverage.checked` lists every invariant in scope (`--inv`, or all `[inv.*]` of `ebt/spec.toml`); a spec without invariants is `inputs-untrusted`.
+- **`--policy feature` (CLI-only, L24/L34):** for new features. `--repro` is forbidden (exit code `2`, `--repro is not used in feature policy`); `base` must be an ancestor of `head` (`head-not-descendant`) and `base..head` must be non-empty (`feature-empty`).
+  - **Protected paths:** `.acceptbox.toml`, `protect`, and in `witnessbox` mode `ebt`/`tool/ebt_check`. In `command` mode `[command].tests` are **not** protected as a whole.
+  - **Existing tests are immutable:** any edit, delete, typechange, or rename under `[command].tests` in `base..head` rejects with `existing-tests-modified`; this intentionally includes shared helpers/fixtures under `[command].tests`.
+  - **New tests are required:** at least one newly added test file under `[command].tests` (`feature-no-tests` otherwise). In `witnessbox` mode only `feature-empty` applies at this stage.
+  - **Runs:** only `head` is run and must be `green` (`head-not-green`); `base` and `repro` are skipped (`not run in feature policy`). In `witnessbox` mode, `coverage.checked` lists every invariant in scope (`--inv`, or all `[inv.*]` of `ebt/spec.toml`).
+  - **`ACCEPTED` under `feature`** means `head` is green, existing tests are untouched, and new test files were added; **feature correctness against the intended behaviour is not verified** — the verdict message says so itself.
 
 ```sh
 acceptbox accept --policy refactor --base-ref main
+acceptbox accept --policy feature --base-ref main
 ```
 
 ### CLI output
@@ -100,6 +107,7 @@ The summary line is what a human actually reads, so everything that changes the 
 
 ```text
 acceptbox: ACCEPTED [policy=refactor]: no regressions against existing checks; behaviour preservation is not verified (policy=refactor) (report: /tmp/.../accept.json)
+acceptbox: ACCEPTED [policy=feature]: head is green and existing checks are unchanged; feature correctness against the intended behaviour is not verified (policy=feature) (report: /tmp/.../accept.json)
 acceptbox: warning: ebt/ pinned to tip of --ebt-ref 'main' (1a2b3c4d5e6f), not an approved --approved-tree (--pin-from-ref)
 ```
 
@@ -240,11 +248,14 @@ acceptbox render /tmp/accept-run/accept.json --format html --out /tmp/accept-run
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` missing, `--ebt-sha` not ancestor of `--ebt-ref`, `ebt/` hash ≠ `--approved-tree`, or `ebt/spec.toml` missing |
 | `repro-not-descendant` | `accept` (`bugfix`) | `base` is not an ancestor of `repro` |
 | `repro-not-ancestor` | `accept` (`bugfix`) | `repro` is not an ancestor of `head` |
-| `head-not-descendant` | `accept` (`refactor`; `bugfix` with auto-resolved `--repro`) | `base` is not an ancestor of `head` |
+| `head-not-descendant` | `accept` (`refactor`, `feature`; `bugfix` with auto-resolved `--repro`) | `base` is not an ancestor of `head` |
 | `protected-paths-changed` | `accept` | A protected path (`.acceptbox.toml`, `protect`, `[command].tests` in `refactor`, or `ebt`/`tool/ebt_check` in `witnessbox`) changed |
 | `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty (or no commits in `base..head` on auto-resolve) |
 | `repro-ambiguous` | `accept` (`bugfix`, auto-repro) | Multiple commits in `base..head` carry `AcceptBox-Role: repro` |
 | `refactor-empty` | `accept` (`refactor`) | `base..head` diff is empty |
+| `feature-empty` | `accept` (`feature`) | `base..head` diff is empty: the feature changes no files |
+| `existing-tests-modified` | `accept` (`feature` + `command`) | `base..head` edited, deleted, type-changed, or renamed an existing file under `[command].tests` (including shared helpers/fixtures) |
+| `feature-no-tests` | `accept` (`feature` + `command`) | `base..head` added no new test files under `[command].tests` |
 | `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` modified files outside `--tests` |
 | `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |
 | `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`bugfix` + `witnessbox`) | `base` did not fail for the expected invariant |

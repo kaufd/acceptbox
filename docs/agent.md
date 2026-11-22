@@ -44,7 +44,7 @@ Stop and ask the human instead of guessing when:
 ## Stage 0. Environment
 
 ```sh
-acceptbox --installation || uv tool install acceptbox==0.4.0
+acceptbox --installation || uv tool install acceptbox==0.5.0
 acceptbox --installation
 ```
 
@@ -143,7 +143,7 @@ Calibration: green=<BASE> (code 0), red=<temporary defect> (code 1) -> CALIBRATE
 Not covered / limits:
 - command mode verifies commit structure, test immutability, and exit codes, not semantic test quality;
 - local runs rely on .git/config origin; run AcceptBox in CI (or pass --repo URL) for full trust;
-- applies to bugfixes (and human-approved WitnessBox invariants), not unapproved new features; refactors only via `--policy refactor`, which proves no regressions, not preserved behaviour.
+- bugfixes use --policy bugfix (default); refactorings use --policy refactor (proves no regressions, not preserved behaviour); new features use --policy feature (proves head is green and existing tests are intact, not that the feature matches intent — use human-approved WitnessBox invariants and/or scenario verification to check intent).
 ```
 
 ---
@@ -157,7 +157,7 @@ Follow this playbook whenever you fix a bug in a repository that already has `.a
 - **Bugfix?** Yes → use the `base → repro → head` workflow below (`--policy bugfix`, default).
 - **Refactoring (no behaviour change)?** Yes → use `--policy refactor` (`base` green → `head` green without a `repro` commit; do not modify tests or `ebt/`). Only for changes that truly keep behaviour: `ACCEPTED` here proves no regressions against existing checks, not preserved behaviour, so never use it to skip a `repro` for a bugfix or a feature.
 - **Task with human-approved WitnessBox invariants (`--mode witnessbox`)?** Yes → follow the `ebt/` rules too; never edit `ebt/` or `tool/ebt_check`.
-- **New feature without approved EBT spec?** Do **not** fake a `repro` commit; follow the repository's normal feature workflow and note in the PR why `base → repro → head` was not used.
+- **New feature?** Yes → use `--policy feature`: one or more commits with code plus new test files; never edit existing tests (put new helpers/fixtures in new files; if a shared test helper must change, stop and ask the human); `ACCEPTED` proves tests pass and existing tests are intact, not that the feature matches intent.
 
 ## 2. Inspect `.acceptbox.toml` first (read-only)
 
@@ -225,6 +225,9 @@ acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 | `repro-tests-modified` (code `1`) | `head` modified, renamed, or deleted a file from `repro` | Do not edit repro test files in `head`; fix the repro commit properly before fixing the bug |
 | `repro-green` (code `1`) | Tests passed on `repro` | Your repro test did not reproduce the bug; write a failing test that actually triggers it |
 | `head-not-green` (code `1`) | Tests did not pass on `head` | Read `runs/head/...` log referenced in `accept.json` and finish the fix |
+| `feature-empty` (code `1`, `feature`) | `base..head` has no file changes | Commit the feature |
+| `existing-tests-modified` (code `1`, `feature`) | The feature modified, renamed, or deleted existing test files | Revert edits to existing tests; put new fixtures in new files; if a shared test helper must change, stop and ask the human |
+| `feature-no-tests` (code `1`, `feature`) | The feature adds no new test files under `[command].tests` | Add test files under `[command].tests` |
 | `base-green` / `base-red-wrong-reason` (code `1`, `witnessbox`) | `base` did not fail on target `--inv` | Stop and report to the human — the bug may not violate the specified invariant |
 | `inputs-untrusted` (code `1`, `witnessbox`) | `ebt/` SHA or tree hash mismatch | Verify `--ebt-sha`, `--ebt-ref`, and `--approved-tree` with the human |
 | `config-invalid` (code `2`) | `.acceptbox.toml` in `base` failed schema validation | Stop and report to the human (do not edit `.acceptbox.toml` in the bugfix branch) |
@@ -244,3 +247,21 @@ Include this section in your PR description:
 ```
 
 Keep the original `repro` and `head` commits intact until the acceptor finishes acceptance (do not squash before acceptance, L13).
+
+## 7. Feature verification (for orchestrator or verifier agent)
+
+Feature acceptance (`--policy feature`) proves that the tests pass and existing tests are intact. It does not prove that the feature matches the human's intent. If the project has a UI, add a manual verification pass:
+
+1. Verification MUST be performed by a **different** agent than the one that implemented the feature.
+2. Run `acceptbox accept --policy feature --base-ref main`; record the verdict line and the path to `accept.json`.
+3. If the project has a UI: from the task description and the diff, write a numbered list of scenarios, one line each: `"open X -> do Y -> see Z"`. Scenarios must cover what the human asked for, not just what was implemented in code.
+4. **Stop point:** show the scenario list to the human and wait for approval or edits. Do NOT run UI verification without approval.
+5. Configure the environment yourself (browser, simulator, server, test data) and log every setup step. Do NOT modify repository files: if repo edits are needed, stop and report.
+6. Walk through each approved scenario in a real browser or simulator and capture a screenshot for each.
+7. Produce a report using the template:
+   - the `accept` verdict line;
+   - table `# | Scenario | Result (pass/fail/blocked) | Observation | Screenshot`;
+   - list of environment setup steps performed;
+   - explicit statement: `"UI result is the verifier agent's judgment, not a deterministic check."`.
+
+`blocked` means a scenario could not be executed due to the environment; it is NOT `pass`.

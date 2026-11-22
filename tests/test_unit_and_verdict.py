@@ -411,6 +411,31 @@ class TestVerdictMatrix(unittest.TestCase):
             self.assertEqual((v.result, v.exit_code, v.reason_code), expected)
 
 
+class TestFeatureVerdict(unittest.TestCase):
+    def test_feature_rules_order_and_messages(self) -> None:
+        self.assertEqual(verdict.feature_empty_verdict(head_changed=[]).reason_code,
+                         "feature-empty")
+        self.assertIsNone(verdict.feature_empty_verdict(head_changed=["app.py"]))
+        v = verdict.feature_tests_verdict(tests_added=["tests/n.py"],
+                                          tests_modified=["tests/b.py", "tests/a.py"])
+        self.assertEqual((v.reason_code, v.exit_code), ("existing-tests-modified", 1))
+        self.assertIn("tests/a.py, tests/b.py", v.message)
+        self.assertEqual(verdict.feature_tests_verdict(tests_added=[],
+                                                       tests_modified=[]).reason_code,
+                         "feature-no-tests")
+        self.assertIsNone(verdict.feature_tests_verdict(tests_added=["tests/n.py"],
+                                                        tests_modified=[]))
+
+    def test_feature_accepted_message_and_head_only_runs(self) -> None:
+        self.assertIn("not verified (policy=feature)", verdict.accepted("feature").message)
+        green = RunOutcome("green", 0, "ok", 1, None, None)
+        red = RunOutcome("red", 1, "fail", 1, None, None)
+        self.assertEqual(verdict.evaluate_runs([("head", green)], policy="feature").result,
+                         "ACCEPTED")
+        self.assertEqual(verdict.evaluate_runs([("head", red)], policy="feature").reason_code,
+                         "head-not-green")
+
+
 class TestReportAndInstallation(unittest.TestCase):
     def test_outdir_lock_and_atomic_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

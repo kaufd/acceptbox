@@ -205,7 +205,7 @@ argv = ["./scripts/acceptbox-test.sh"]
 ebt_ref = "main"
 ```
 
-Run `acceptbox accept --base-ref main` for everyday bugfixes in `command` mode (or `--policy refactor` for refactorings), or run `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref` when accepting against human-approved EBT invariants.
+Run `acceptbox accept --base-ref main` for everyday bugfixes in `command` mode (or `--policy refactor` for refactorings, or `--policy feature` for features), or run `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref` when accepting against human-approved EBT invariants.
 
 ## Wrapper script contract
 
@@ -263,6 +263,11 @@ worktrees. The rules below apply to every coding agent working in this repositor
    - a **Not verified** list (behaviour outside the repro test, UI/manual paths, or if local
      acceptance had `ref_source_kind: "local"` and awaits CI verification).
    If you could not run AcceptBox locally, say so explicitly and why.
+7. **Features use `--policy feature`; never modify existing test files** (put new fixtures in new
+   files; if a shared test helper must change, stop and ask the human).
+8. **Feature verification and UI scenarios:** follow
+   [docs/agent.md](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md#7-feature-verification-for-orchestrator-or-verifier-agent),
+   section "Feature verification".
 
 ## Local self-check command
 
@@ -275,7 +280,10 @@ acceptbox accept --base-ref main
 # Refactoring (command mode):
 acceptbox accept --policy refactor --base-ref main
 
-# WitnessBox mode (optional --inv, optional --policy refactor):
+# Feature (command mode):
+acceptbox accept --policy feature --base-ref main
+
+# WitnessBox mode (optional --inv, optional --policy refactor|feature):
 acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 

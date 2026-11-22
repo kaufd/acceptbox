@@ -205,7 +205,7 @@ argv = ["./scripts/acceptbox-test.sh"]
 ebt_ref = "main"
 ```
 
-Для обычных багфиксов запускайте `acceptbox accept --base-ref main` в режиме `command` (или `--policy refactor` для рефакторингов), а для приёмки по утверждённым EBT-инвариантам — `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref`.
+Для обычных багфиксов запускайте `acceptbox accept --base-ref main` в режиме `command` (или `--policy refactor` для рефакторингов, или `--policy feature` для фич), а для приёмки по утверждённым EBT-инвариантам — `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref`.
 
 ## Контракт скрипта-обёртки
 
@@ -263,6 +263,12 @@ ebt_ref = "main"
    - список **Not verified** (поведение вне репро-теста, ручные/UI-сценарии или пометка, что
      локальный прогон шёл с `ref_source_kind: "local"` и ждёт проверки в CI).
    Если запустить AcceptBox локально не удалось, прямо укажите это и причину.
+7. **Фичи используют `--policy feature`; никогда не изменяйте существующие тестовые файлы**
+   (новые фикстуры кладите в новые файлы; если необходимо менять общий хелпер, остановитесь и
+   спросите человека).
+8. **Проверка фичи и UI-сценарии:** следуйте
+   [docs/agent.ru.md](https://github.com/kaufd/acceptbox/blob/main/docs/agent.ru.md#7-проверка-фичи-для-оркестратора-или-агента-проверяющего),
+   раздел «Проверка фичи».
 
 ## Команда локальной самопроверки
 
@@ -275,7 +281,10 @@ acceptbox accept --base-ref main
 # Рефакторинг (command):
 acceptbox accept --policy refactor --base-ref main
 
-# Режим WitnessBox (опционально --inv, --policy refactor):
+# Фича (command):
+acceptbox accept --policy feature --base-ref main
+
+# Режим WitnessBox (опционально --inv, опционально --policy refactor|feature):
 acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 

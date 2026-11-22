@@ -37,6 +37,11 @@ def accepted(policy: str = "bugfix") -> Verdict:
         return Verdict("ACCEPTED", 0, None,
                        "no regressions against existing checks; "
                        "behaviour preservation is not verified (policy=refactor)")
+    if policy == "feature":
+        return Verdict("ACCEPTED", 0, None,
+                       "head is green and existing checks are unchanged; "
+                       "feature correctness against the intended behaviour is not verified "
+                       "(policy=feature)")
     return Verdict("ACCEPTED", 0, None, "all acceptance checks passed")
 
 
@@ -81,7 +86,8 @@ def ancestry_verdict(*, base_ancestor_of_repro: bool,
 
 
 def base_head_ancestry_verdict(*, base_ancestor_of_head: bool) -> Verdict | None:
-    """Стадия 7 (policy=refactor и авто-резолв --repro, L30): base должен быть предком head."""
+    """Стадия 7 (policy=refactor, policy=feature и авто-резолв --repro, L30):
+    base должен быть предком head."""
     if not base_ancestor_of_head:
         return rejected("head-not-descendant",
                         "base is not an ancestor of head: ancestry base -> head violated")
@@ -92,6 +98,26 @@ def refactor_empty_verdict(*, head_changed: list[str]) -> Verdict | None:
     """Стадия 9 (policy=refactor, L24/L30): дифф base..head не должен быть пустым."""
     if not head_changed:
         return rejected("refactor-empty", "diff base..head is empty: refactoring changes no files")
+    return None
+
+
+def feature_empty_verdict(*, head_changed: list[str]) -> Verdict | None:
+    """Стадия 9 (policy=feature, L34): дифф base..head не должен быть пустым."""
+    if not head_changed:
+        return rejected("feature-empty", "diff base..head is empty: feature changes no files")
+    return None
+
+
+def feature_tests_verdict(*, tests_added: list[str],
+                          tests_modified: list[str]) -> Verdict | None:
+    """Стадия 9 (policy=feature, L34): существующие тесты не меняются,
+    и добавлен хотя бы один новый тест."""
+    if tests_modified:
+        paths = ", ".join(sorted(set(tests_modified)))
+        return rejected("existing-tests-modified",
+                        f"feature modifies existing test files: {paths}")
+    if not tests_added:
+        return rejected("feature-no-tests", "feature adds no new test files under --tests")
     return None
 
 
@@ -130,7 +156,7 @@ def run_verdict(run_name: str, outcome: RunOutcome, *,
     """Стадия 10, один прогон: None — исход соответствует ожиданию, приёмка продолжается."""
     if outcome.status == "error":
         return error("gate-error", f"run {run_name} failed with error: {outcome.reason}")
-    if policy == "refactor":
+    if policy != "bugfix":
         if run_name == "base":
             if outcome.status == "green":
                 return None
@@ -188,7 +214,8 @@ def coverage(mode: str, invariants: list[str],
     """Охват приёмки (L11): проверенные инварианты, пропущенные проверки,
     непроверенные требования.
 
-    ``all_green`` — refactor принят: все инварианты области прошли на base и head (L31).
+    ``all_green`` — refactor или feature принят: все инварианты области прошли
+    (на base и head для refactor, на head для feature) (L31).
     """
     if mode != "witnessbox" or not invariants:
         return {"checked": [], "skipped": [], "unchecked": list(invariants)}

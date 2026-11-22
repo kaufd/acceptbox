@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 REPORT_FORMAT = 1
 
-_CHECK_ORDER = ("base_ref", "ebt_trust", "ancestry", "protected_paths", "repro_tests", "refactor")
+_CHECK_ORDER = ("base_ref", "ebt_trust", "ancestry", "protected_paths", "repro_tests", "refactor", "feature")
 _RUN_ORDER = ("base", "repro", "head")
 _BACKTICK_RUN_RE = re.compile(r"`+")
 # Знаки, из которых GFM делает разметку, HTML, формулы ($) или @упоминания.
@@ -204,6 +204,7 @@ def _check_detail_items(name: str, entry: dict) -> list[tuple[str, object]]:
         "protected_paths": ("specs", "changed_base_repro", "changed_base_head"),
         "repro_tests": ("reason", "changed_base_repro", "outside_tests", "modified_after_repro"),
         "refactor": ("changed_base_head",),
+        "feature": ("changed_base_head", "tests_added", "tests_modified"),
     }
     preferred = preferred_map.get(name, ())
     keys = [k for k in preferred if k in entry and k != "status"]

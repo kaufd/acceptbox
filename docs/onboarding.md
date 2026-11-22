@@ -10,7 +10,7 @@ For stack-specific `.acceptbox.toml` templates, wrapper scripts, and a ready-to-
 
 - **Bugfixes (`--policy bugfix`, default, with `command` or `witnessbox`):** the `base → repro → head` chain with a failing repro commit is designed for bugfixes.
 - **Refactorings (`--policy refactor`, with `command` or `witnessbox`):** `base` green → `head` green without a `repro` commit, automatically protecting `.acceptbox.toml` and `[command].tests` (or `ebt/` and `tool/ebt_check` in `witnessbox` mode).
-- **New features:** a failing reproduction test written by the same model that writes the implementation does not give a strong guarantee (the model can fit the test and code to each other). For features, use a human-approved specification (`--mode witnessbox`, D4/L10) and/or independent review and behavioural checks.
+- **New features (`--policy feature`, with `command` or `witnessbox`):** a failing reproduction test written by the same model that writes the implementation does not give a strong guarantee (the model can fit the test and code to each other). `--policy feature` verifies that `head` is green, existing tests are intact, and new tests were added, but not that the feature matches intent; for features, use a human-approved specification (`--mode witnessbox`, D4/L10) and/or independent review and scenario verification.
 
 ## 1. Install and check the environment
 
