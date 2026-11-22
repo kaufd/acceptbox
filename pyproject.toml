@@ -35,4 +35,4 @@ acceptbox = "acceptbox.cli:main"
 packages = ["src/acceptbox"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/acceptbox", "/actions", "/tests", "/README.md", "/README.ru.md", "/LICENSE", "/pyproject.toml"]
+include = ["/src/acceptbox", "/tests", "/README.md", "/README.ru.md", "/LICENSE", "/pyproject.toml"]

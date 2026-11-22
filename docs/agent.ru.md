@@ -147,8 +147,8 @@ git remote get-url origin
 
 ## 1. Проверьте применимость до написания кода
 
-- **Багфикс?** Да → используйте цепочку `base → repro → head` ниже (`--policy bugfix`, по умолчанию). В репозиториях с [GitHub Actions AcceptBox](ci.ru.md) добавляйте trailer `AcceptBox-Role: repro` в коммит `repro` (и `AcceptBox-Inv: INV-1` для инвариантов WitnessBox).
-- **Рефакторинг (без изменения поведения)?** Да → используйте `--policy refactor` (`base` зелёный → `head` зелёный без `repro`; тесты и `ebt/` не менять) и добавьте trailer `AcceptBox-Policy: refactor` (или лейбл PR `refactor`) для CI.
+- **Багфикс?** Да → используйте цепочку `base → repro → head` ниже (`--policy bugfix`, по умолчанию).
+- **Рефакторинг (без изменения поведения)?** Да → используйте `--policy refactor` (`base` зелёный → `head` зелёный без `repro`; тесты и `ebt/` не менять).
 - **Задача с утверждёнными человеком инвариантами WitnessBox (`--mode witnessbox`)?** Да → соблюдайте также правила `ebt/`, не трогайте `ebt/` и `tool/ebt_check`.
 - **Новая фича без утверждённой EBT-спецификации?** **Не** фабрикуйте фиктивный `repro`-коммит; работайте по обычному процессу репозитория и укажите в PR, почему `base → repro → head` не применялась.
 

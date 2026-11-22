@@ -79,7 +79,7 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - If the repository argument (`--repo` for `--base-ref`, `--ebt-repo` for `--ebt-ref`) is a URL or scp-like remote, the ref is fetched directly from it (`ref_source_kind: "remote"`).
 - If it is a local path, AcceptBox queries `git remote get-url origin` and fetches the ref from `origin` (`ref_source_kind: "origin"`), so an agent moving local branches cannot forge ancestry. Short ref names resolve `refs/heads/<ref>` first, then `refs/tags/<ref>`.
 - If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Pass `--strict-refs` (CLI-only, recommended in CI) to reject `"local"` fallback fail-closed with `ref-source-local` (exit code `1`). In `command` mode, `--strict-refs` requires `--base-ref`. Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
-- **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI, see [docs/ci.md](ci.md)) / pass URLs for `--repo` and `--ebt-repo`.
+- **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI) / pass URLs for `--repo` and `--ebt-repo`.
 
 ### Policies (`--policy bugfix` vs `--policy refactor`)
 

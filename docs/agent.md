@@ -154,8 +154,8 @@ Follow this playbook whenever you fix a bug in a repository that already has `.a
 
 ## 1. Check scope before writing code
 
-- **Bugfix?** Yes → use the `base → repro → head` workflow below (`--policy bugfix`, default). In repositories using [AcceptBox GitHub Actions](ci.md), add commit trailer `AcceptBox-Role: repro` to the repro commit (and `AcceptBox-Inv: INV-1` when targeting WitnessBox invariants).
-- **Refactoring (no behaviour change)?** Yes → use `--policy refactor` (`base` green → `head` green without a `repro` commit; do not modify tests or `ebt/`), and add commit trailer `AcceptBox-Policy: refactor` (or the `refactor` PR label) for CI.
+- **Bugfix?** Yes → use the `base → repro → head` workflow below (`--policy bugfix`, default).
+- **Refactoring (no behaviour change)?** Yes → use `--policy refactor` (`base` green → `head` green without a `repro` commit; do not modify tests or `ebt/`).
 - **Task with human-approved WitnessBox invariants (`--mode witnessbox`)?** Yes → follow the `ebt/` rules too; never edit `ebt/` or `tool/ebt_check`.
 - **New feature without approved EBT spec?** Do **not** fake a `repro` commit; follow the repository's normal feature workflow and note in the PR why `base → repro → head` was not used.
 

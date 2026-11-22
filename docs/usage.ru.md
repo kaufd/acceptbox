@@ -79,7 +79,7 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 - Если репозиторий (`--repo` для `--base-ref`, `--ebt-repo` для `--ebt-ref`) задан как URL или scp-адрес, ссылка берётся напрямую из него (`ref_source_kind: "remote"`).
 - Если это локальный путь, AcceptBox вызывает `git remote get-url origin` и берёт ссылку из `origin` (`ref_source_kind: "origin"`), чтобы агент не мог сдвинуть локальную ветку и подделать ancestry. Короткие имена разрешаются сначала как `refs/heads/<ref>`, затем как `refs/tags/<ref>`.
 - Если у локального репозитория нет remote `origin`, проверка идёт по самому локальному репозиторию с пометкой `ref_source_kind: "local"` в отчёте (слабая проверка). Передайте `--strict-refs` (только CLI, рекомендуется в CI), чтобы fail-closed отклонять запасной путь `"local"` с кодом `ref-source-local` (код `1`). В режиме `command` `--strict-refs` требует `--base-ref`. Любой другой сбой чтения `origin` (например, `safe.directory`) даёт `gate-error`.
-- **Граница доверия:** URL `origin` хранится в `.git/config` локального checkout. Сверяйте `ref_source` и `ref_source_kind` в `accept.json`, а для полной гарантии запускайте приёмку вне досягаемости агента (CI, см. [docs/ci.ru.md](ci.ru.md)) или передавайте URL в `--repo` / `--ebt-repo`.
+- **Граница доверия:** URL `origin` хранится в `.git/config` локального checkout. Сверяйте `ref_source` и `ref_source_kind` в `accept.json`, а для полной гарантии запускайте приёмку вне досягаемости агента (CI) или передавайте URL в `--repo` / `--ebt-repo`.
 
 ### Политики приёмки (`--policy bugfix` и `--policy refactor`)
 

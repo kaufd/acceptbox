@@ -95,7 +95,6 @@ AcceptBox enforces commit structure, file immutability, and clean-worktree execu
 
 - [Quick start & onboarding](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) — step-by-step walkthrough for `command` mode, `witnessbox` mode, and `calibrate`.
 - [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
-- [Autonomous CI pipeline](https://github.com/kaufd/acceptbox/blob/main/docs/ci.md) — reusable GitHub Actions (`actions/setup` + `actions/accept`) for zero-operator bugfix and refactoring PR acceptance.
 - [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.
 - [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
 - [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L30`).
