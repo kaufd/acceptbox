@@ -90,6 +90,11 @@ def refactor_empty_verdict(*, head_changed: list[str]) -> Verdict | None:
     return None
 
 
+def repro_ambiguous(message: str) -> Verdict:
+    """Авто-резолв --repro (L30): несколько коммитов помечены AcceptBox-Role: repro."""
+    return rejected("repro-ambiguous", message)
+
+
 def protected_paths_verdict(*, changed_base_repro: list[str],
                             changed_base_head: list[str]) -> Verdict | None:
     """Стадия 8: защищённые пути не меняются в base..repro и base..head."""

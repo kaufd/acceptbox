@@ -192,23 +192,19 @@ git remote get-url origin
 Режим `command`:
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO"
+acceptbox accept --base-ref main
 ```
 
-Режим `witnessbox` (с `--ebt-sha` и `--approved-tree`, полученными от человека):
+*(Для рефакторингов: `acceptbox accept --policy refactor --base-ref main`. Если до `repro` были вспомогательные коммиты, добавьте trailer `AcceptBox-Role: repro` в сообщение `repro`-коммита или передайте `--repro "$REPRO"` явно.)*
+
+Режим `witnessbox` (с явными `--ebt-sha` / `--approved-tree` или с `--pin-from-ref` для локального запуска):
 
 ```sh
 acceptbox accept \
   --mode witnessbox \
   --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO" \
   --inv <INV-IDs> \
-  --ebt-sha <утверждённый-ebt-sha> \
-  --approved-tree <утверждённый-tree-sha256>
+  --pin-from-ref
 ```
 
 ## 5. Разбор результатов (`accept.json`)

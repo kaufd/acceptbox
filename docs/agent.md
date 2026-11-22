@@ -199,23 +199,19 @@ Remember: AcceptBox tests committed Git objects only — uncommitted working-tre
 `command` mode:
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO"
+acceptbox accept --base-ref main
 ```
 
-`witnessbox` mode (using `--ebt-sha` and `--approved-tree` provided by the human):
+*(For refactorings: `acceptbox accept --policy refactor --base-ref main`. If your branch has helper commits before the repro commit, add `AcceptBox-Role: repro` as a trailer in the repro commit message, or pass `--repro "$REPRO"` explicitly.)*
+
+`witnessbox` mode (either using explicit `--ebt-sha` / `--approved-tree` or `--pin-from-ref` for local runs):
 
 ```sh
 acceptbox accept \
   --mode witnessbox \
   --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO" \
   --inv <INV-IDs> \
-  --ebt-sha <human-approved-ebt-sha> \
-  --approved-tree <human-approved-tree-sha256>
+  --pin-from-ref
 ```
 
 ## 5. Diagnosing results (`accept.json`)

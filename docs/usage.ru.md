@@ -65,12 +65,15 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 
 ## Приёмка цепочки коммитов (`accept`)
 
-### Значения по умолчанию
+### Значения по умолчанию и локальный авто-резолв
 
 - `--mode`: из `.acceptbox.toml` или `command`.
 - `--repo`: `.`.
+- `--base`: если опущен, требуется `--base-ref <ветка>` — автоматически вычисляется `git merge-base <доверенная ветка> <head>` до чтения `.acceptbox.toml` из этого `base`.
+- `--repro` (в политике `bugfix`): если опущен, автоматически выбирается единственный коммит в `base..head` с trailer `AcceptBox-Role: repro` (несколько → `repro-ambiguous`), иначе первый first-parent коммит в `base..head` (`inputs.repro_source`: `"explicit" | "trailer" | "first-commit"`). Запрещён в политике `refactor`.
 - `--head`: `HEAD` из `--repo`, резолвится в полный SHA сразу после проверки `git` (сбой даёт `gate-error` с отчётом). Явно переданный `--head` принимается только как полный 40/64-hex SHA. **Важно:** незакоммиченные правки рабочего дерева не проверяются; если `--repo` указан как URL, без `--head` через `git ls-remote` берётся удалённый `HEAD` (обычно ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно).
 - `--ebt-repo` (режим `witnessbox`): из `[witnessbox].ebt_repo` или `--repo`.
+- `--pin-from-ref` (режим `witnessbox`, только CLI): берёт `--ebt-sha` с вершины доверенной `--ebt-ref` и вычисляет `--approved-tree` напрямую из её Git-объектов (нельзя совмещать с `--ebt-sha` и `--approved-tree`).
 - `--timeout`: из `.acceptbox.toml` или `600` секунд.
 - `--out`: атомарно создаёт новый пустой каталог в системном `TMPDIR` и печатает путь к `accept.json`. При явном `--out` каталог должен отсутствовать или быть пустым (блокировка `O_EXCL`).
 
@@ -95,7 +98,7 @@ acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git m
 Минимальный запуск (при наличии `.acceptbox.toml` в `base`):
 
 ```sh
-acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <полный-sha>
+acceptbox accept --base-ref main
 ```
 
 Полный запуск с явными флагами (без `.acceptbox.toml`):
@@ -198,7 +201,8 @@ acceptbox calibrate \
 | `repro-not-ancestor` | `accept` (`bugfix`) | `repro` не является предком `head` |
 | `head-not-descendant` | `accept` (`refactor`) | `base` не является предком `head` |
 | `protected-paths-changed` | `accept` | Защищённый путь (`.acceptbox.toml`, `protect`, `[command].tests` в `refactor` или `ebt`/`tool/ebt_check` в `witnessbox`) изменён |
-| `repro-empty` | `accept` (`bugfix` + `command`) | Дифф `base..repro` пуст |
+| `repro-empty` | `accept` (`bugfix` + `command`) | Дифф `base..repro` пуст (или нет коммитов в `base..head` при авто-резолве) |
+| `repro-ambiguous` | `accept` (`bugfix`, авто-`repro`) | Несколько коммитов в `base..head` помечены `AcceptBox-Role: repro` |
 | `refactor-empty` | `accept` (`refactor`) | Дифф `base..head` пуст |
 | `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` меняет пути вне `--tests` |
 | `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` изменяет, переименовывает или удаляет файлы из `base..repro` |

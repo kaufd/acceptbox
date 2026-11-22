@@ -65,12 +65,15 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 
 ## Accepting a commit chain (`accept`)
 
-### Defaults
+### Defaults and local auto-resolution
 
 - `--mode`: from `.acceptbox.toml`, or `command`.
 - `--repo`: `.`.
+- `--base`: if omitted, requires `--base-ref <ref>` and automatically resolves `git merge-base <trusted ref> <head>` before loading `.acceptbox.toml` from that `base`.
+- `--repro` (in `bugfix` policy): if omitted, automatically selects the unique commit in `base..head` with trailer `AcceptBox-Role: repro` (multiple trailers → `repro-ambiguous`), or falls back to the first first-parent commit in `base..head` (`inputs.repro_source` records `"explicit" | "trailer" | "first-commit"`). Forbidden in `refactor` policy.
 - `--head`: `HEAD` of `--repo`, resolved to a full SHA immediately after checking `git` (failure produces `gate-error` with a report). An explicitly passed `--head` must be a full 40/64-hex SHA. **Note:** uncommitted working-tree edits are never tested; when `--repo` is a URL, omitting `--head` resolves remote `HEAD` via `git ls-remote` (usually the default branch, not a feature branch — pass `--head` explicitly for URLs).
 - `--ebt-repo` (`witnessbox` mode): from `[witnessbox].ebt_repo`, or `--repo`.
+- `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and computes `--approved-tree` directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`).
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
 
@@ -95,7 +98,7 @@ acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git m
 Minimal invocation (with `.acceptbox.toml` committed in `base`):
 
 ```sh
-acceptbox accept --base-ref main --base "$(git merge-base main HEAD)" --repro <full-sha>
+acceptbox accept --base-ref main
 ```
 
 Explicit invocation (without `.acceptbox.toml`):
@@ -198,7 +201,8 @@ acceptbox calibrate \
 | `repro-not-ancestor` | `accept` (`bugfix`) | `repro` is not an ancestor of `head` |
 | `head-not-descendant` | `accept` (`refactor`) | `base` is not an ancestor of `head` |
 | `protected-paths-changed` | `accept` | A protected path (`.acceptbox.toml`, `protect`, `[command].tests` in `refactor`, or `ebt`/`tool/ebt_check` in `witnessbox`) changed |
-| `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty |
+| `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty (or no commits in `base..head` on auto-resolve) |
+| `repro-ambiguous` | `accept` (`bugfix`, auto-repro) | Multiple commits in `base..head` carry `AcceptBox-Role: repro` |
 | `refactor-empty` | `accept` (`refactor`) | `base..head` diff is empty |
 | `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` modified files outside `--tests` |
 | `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |

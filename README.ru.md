@@ -61,11 +61,10 @@ git commit -m "fix: handle empty input (#123)"
 ### 4. Запустите приёмку
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO"
+acceptbox accept --base-ref main
 ```
+
+Когда в `main` есть `.acceptbox.toml`, AcceptBox сам вычислит `base` (`merge-base main HEAD`), `repro` (коммит с trailer `AcceptBox-Role: repro` или первый коммит в `base..HEAD`) и `head` (`HEAD`). Для ветки рефакторинга (`base` зелёный → `head` зелёный, тесты защищены) выполните `acceptbox accept --policy refactor --base-ref main`.
 
 AcceptBox напечатает вердикт и путь к `accept.json` (создаётся атомарно в новом пустом каталоге в `TMPDIR` или в `--out <пустой-каталог>`):
 

@@ -136,8 +136,11 @@ def commit_present(repo: Path, env: dict[str, str], sha: str) -> bool:
 
 def _fetch(repo: Path, env: dict[str, str], source: str, *refspecs: str) -> None:
     # "--": источник (в т.ч. URL origin из .git/config) не может стать опцией fetch.
+    # Локальный относительный путь (например ".") приводим к абсолютному, иначе
+    # git -C <temp_clone> трактовал бы его относительно временного клона.
+    fetch_source = source if is_remote_source(source) else os.path.abspath(source)
     run_git(repo, env, "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "--",
-            source, *refspecs)
+            fetch_source, *refspecs)
 
 
 def fetch_all_refs(repo: Path, env: dict[str, str], source: str) -> None:
@@ -214,7 +217,7 @@ def trusted_ref_source(source: str, env: dict[str, str]) -> tuple[str, str]:
     # Код 2 — remote origin не настроен; любой другой сбой (safe.directory и т.п.)
     # не должен молча ослаблять проверку до локальной ветки.
     if result.returncode == 2:
-        return source, "local"
+        return os.path.abspath(source), "local"
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
         message = f"git remote get-url origin: код {result.returncode}"
@@ -279,6 +282,39 @@ def is_ancestor(repo: Path, env: dict[str, str], ancestor: str, descendant: str)
     detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
     message = f"git merge-base --is-ancestor: код {result.returncode}"
     raise GitError(f"{message}: {detail[-1]}" if detail else message)
+
+
+def merge_base(repo: Path, env: dict[str, str], commit_a: str, commit_b: str) -> str | None:
+    """``git merge-base`` двух коммитов: полный SHA или None, если общего предка нет."""
+    argv = ["git", "--no-replace-objects", "-C", str(repo),
+            "merge-base", commit_a, commit_b]
+    try:
+        result = subprocess.run(argv, env=env, capture_output=True,
+                                timeout=GIT_TIMEOUT_SEC, check=False)
+    except subprocess.TimeoutExpired as error:
+        raise GitError("git merge-base: превышен таймаут") from error
+    except OSError as error:
+        raise GitError(f"не удалось запустить git: {error}") from error
+    if result.returncode == 0:
+        sha = result.stdout.strip().decode("ascii", "replace").lower()
+        return sha or None
+    if result.returncode == 1:
+        return None
+    detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+    message = f"git merge-base: код {result.returncode}"
+    raise GitError(f"{message}: {detail[-1]}" if detail else message)
+
+
+def rev_list_first_parent(repo: Path, env: dict[str, str], base: str, head: str) -> list[str]:
+    """Хронологический список first-parent коммитов в диапазоне ``base..head``."""
+    output = run_git(repo, env, "rev-list", "--first-parent", "--reverse", f"{base}..{head}")
+    return [line.strip().lower() for line in output.decode("ascii", "replace").splitlines()
+            if line.strip()]
+
+
+def commit_message(repo: Path, env: dict[str, str], sha: str) -> str:
+    """Полное сообщение коммита (для разбора trailer ``AcceptBox-Role: repro``)."""
+    return run_git(repo, env, "show", "-s", "--format=%B", sha).decode("utf-8", "replace")
 
 
 def changed_paths(repo: Path, env: dict[str, str], older: str, newer: str,

@@ -61,11 +61,10 @@ git commit -m "fix: handle empty input (#123)"
 ### 4. Run acceptance
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro "$REPRO"
+acceptbox accept --base-ref main
 ```
+
+With `.acceptbox.toml` on `main`, AcceptBox automatically resolves `base` (`merge-base main HEAD`), `repro` (the commit marked with `AcceptBox-Role: repro`, or the first commit in `base..HEAD`), and `head` (`HEAD`). For a refactoring branch (`base` green → `head` green, tests protected), run `acceptbox accept --policy refactor --base-ref main`.
 
 AcceptBox prints the verdict and the path to `accept.json` (created atomically in a new directory under `TMPDIR`, or in `--out <empty-dir>`):
 

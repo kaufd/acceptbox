@@ -194,18 +194,21 @@ class TestStrictRefs(unittest.TestCase):
 
 
 class TestRefactorPolicyCommand(unittest.TestCase):
-    def test_cli_enforces_repro_presence_by_policy(self) -> None:
+    def test_cli_enforces_base_and_repro_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             fx = _make_command_refactor_fixture(tmp)
-            # bugfix without --repro -> exit 2
-            res1 = _run_cli(["accept", "--repo", str(fx["repo"]),
-                             "--base", fx["base"], "--head", fx["head"]])
-            self.assertEqual(res1.returncode, 2)
+            # neither --base nor --base-ref -> exit 2
+            res0 = _run_cli(["accept", "--repo", str(fx["repo"]), "--head", fx["head"]])
+            self.assertEqual(res0.returncode, 2)
             # refactor with --repro -> exit 2
             res2 = _run_cli(["accept", "--policy", "refactor", "--repo", str(fx["repo"]),
                              "--base", fx["base"], "--repro", fx["head"], "--head", fx["head"]])
             self.assertEqual(res2.returncode, 2)
+            # --pin-from-ref in command mode -> exit 2
+            res3 = _run_cli(["accept", "--mode", "command", "--repo", str(fx["repo"]),
+                             "--base", fx["base"], "--head", fx["head"], "--pin-from-ref"])
+            self.assertEqual(res3.returncode, 2)
 
     def test_refactor_command_happy_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -376,6 +379,126 @@ class TestRefactorPolicyWitnessbox(unittest.TestCase):
                 json.loads((out2 / "accept.json").read_text(encoding="utf-8"))["reason_code"],
                 "head-not-green",
             )
+
+
+class TestLocalAutoResolve(unittest.TestCase):
+    def test_bugfix_one_liner_auto_resolves_base_repro_and_head(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            repo = tmp / "repo"
+            _init_repo(repo)
+            (repo / "app.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+            (repo / "tests").mkdir()
+            (repo / "tests" / "test_app.py").write_text(
+                "import unittest\nfrom app import add\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_zero(self): self.assertEqual(add(0, 0), 0)\n",
+                encoding="utf-8",
+            )
+            (repo / ".acceptbox.toml").write_text(
+                'format = 1\nmode = "command"\n\n[command]\ntests = ["tests/"]\n'
+                f'argv = [{json.dumps(PYTHON)}, "-m", "unittest", "discover", "-s", "tests"]\n',
+                encoding="utf-8",
+            )
+            base = _commit(repo, "base")
+            _git(repo, "checkout", "-q", "-b", "fix/add")
+            (repo / "tests" / "test_app.py").write_text(
+                "import unittest\nfrom app import add\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_add(self): self.assertEqual(add(2, 3), 5)\n",
+                encoding="utf-8",
+            )
+            repro = _commit(repo, "test: reproduce add bug")
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+            head = _commit(repo, "fix: add numbers")
+
+            out = tmp / "out"
+            res = _run_cli(["accept", "--base-ref", "main", "--out", str(out)], cwd=repo)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["result"], "ACCEPTED")
+            self.assertEqual(data["repo"]["base"], base)
+            self.assertEqual(data["repo"]["repro"], repro)
+            self.assertEqual(data["repo"]["head"], head)
+            self.assertEqual(data["inputs"]["repro_source"], "first-commit")
+            self.assertTrue(data["checks"]["base_ref"]["resolved_base_auto"])
+
+    def test_bugfix_repro_trailer_and_ambiguous_trailer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            repo = tmp / "repo"
+            _init_repo(repo)
+            (repo / "app.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+            (repo / "tests").mkdir()
+            (repo / "tests" / "test_app.py").write_text(
+                "import unittest\nfrom app import add\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_zero(self): self.assertEqual(add(0, 0), 0)\n",
+                encoding="utf-8",
+            )
+            (repo / ".acceptbox.toml").write_text(
+                'format = 1\nmode = "command"\n\n[command]\ntests = ["tests/"]\n'
+                f'argv = [{json.dumps(PYTHON)}, "-m", "unittest", "discover", "-s", "tests"]\n',
+                encoding="utf-8",
+            )
+            _commit(repo, "base")
+            _git(repo, "checkout", "-q", "-b", "fix/trailer")
+            (repo / "tests" / "helper.py").write_text("VAL = 5\n", encoding="utf-8")
+            _commit(repo, "test: add helper")
+            (repo / "tests" / "test_app.py").write_text(
+                "import unittest\nfrom app import add\nfrom tests.helper import VAL\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_add(self): self.assertEqual(add(2, 3), VAL)\n",
+                encoding="utf-8",
+            )
+            repro = _commit(repo, "test: reproduce bug\n\nAcceptBox-Role: repro")
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+            _commit(repo, "fix: bug")
+
+            out1 = tmp / "out1"
+            res1 = _run_cli(["accept", "--base-ref", "main", "--out", str(out1)], cwd=repo)
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            data1 = json.loads((out1 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data1["repo"]["repro"], repro)
+            self.assertEqual(data1["inputs"]["repro_source"], "trailer")
+
+            # Second commit with AcceptBox-Role: repro -> repro-ambiguous
+            (repo / "app.py").write_text("def add(a, b):\n    return a + b + 0\n", encoding="utf-8")
+            _commit(repo, "oops\n\nAcceptBox-Role: repro")
+            out2 = tmp / "out2"
+            res2 = _run_cli(["accept", "--base-ref", "main", "--out", str(out2)], cwd=repo)
+            self.assertEqual(res2.returncode, 1, res2.stderr)
+            data2 = json.loads((out2 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data2["reason_code"], "repro-ambiguous")
+
+    def test_refactor_and_witnessbox_pin_from_ref_one_liner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fx = _make_witnessbox_refactor_fixture(tmp, base_state="green", head_state="green")
+            _git(fx["repo"], "checkout", "-q", "-b", "refactor/work")
+            # Move main back to base so refactor/work is ahead of main
+            _git(fx["repo"], "update-ref", "refs/heads/main", fx["base"])
+            env = _install_fake_witnessbox(tmp)
+
+            # Conflict: --pin-from-ref with --ebt-sha -> exit 2
+            conflict = _run_cli([
+                "accept", "--policy", "refactor", "--mode", "witnessbox",
+                "--base-ref", "main", "--pin-from-ref", "--ebt-sha", fx["ebt_sha"],
+            ], env=env, cwd=fx["repo"])
+            self.assertEqual(conflict.returncode, 2)
+
+            out = tmp / "out"
+            res = _run_cli([
+                "accept", "--policy", "refactor", "--base-ref", "main",
+                "--pin-from-ref", "--out", str(out),
+            ], env=env, cwd=fx["repo"])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["result"], "ACCEPTED")
+            self.assertEqual(data["repo"]["base"], fx["base"])
+            self.assertTrue(data["inputs"]["ebt"]["pinned_from_ref"])
+            self.assertEqual(data["inputs"]["ebt"]["sha"], fx["ebt_sha"])
+            self.assertEqual(data["inputs"]["ebt"]["approved_tree_sha256"], fx["approved_tree"])
 
 
 if __name__ == "__main__":
