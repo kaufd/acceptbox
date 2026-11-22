@@ -257,9 +257,9 @@ ebt_ref = "main"
    `message` и логи прогона из `accept.json`. Устраните причину (неверная разбивка коммитов, тест
    не воспроизводит баг, неполный фикс), а не обходите проверку.
 6. **Отразите результат приёмки в Pull Request.** Добавьте секцию `## Acceptance`:
-   - полные SHA `base`, `repro` и `head`;
-   - вердикт `acceptbox accept` (`ACCEPTED` / `REJECTED` / `ERROR`), код выхода и `ref_source_kind`
-     (`remote` / `origin` / `local`);
+   - вывод `acceptbox render <путь к accept.json> --format md` (вердикт, политика, предупреждения,
+     SHA `base`/`repro`/`head` и `ref_source_kind`); если `render` недоступен — SHA, вердикт с кодом
+     выхода, `ref_source_kind` и все строки `acceptbox: внимание:`;
    - список **Not verified** (поведение вне репро-теста, ручные/UI-сценарии или пометка, что
      локальный прогон шёл с `ref_source_kind: "local"` и ждёт проверки в CI).
    Если запустить AcceptBox локально не удалось, прямо укажите это и причину.
