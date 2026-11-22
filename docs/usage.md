@@ -74,6 +74,7 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - `--head`: `HEAD` of `--repo`, resolved to a full SHA immediately after checking `git` (failure produces `gate-error` with a report). An explicitly passed `--head` must be a full 40/64-hex SHA. **Note:** uncommitted working-tree edits are never tested; when `--repo` is a URL, omitting `--head` resolves remote `HEAD` via `git ls-remote` (usually the default branch, not a feature branch — pass `--head` explicitly for URLs).
 - `--ebt-repo` (`witnessbox` mode): from `[witnessbox].ebt_repo`, or `--repo`.
 - `--pin-from-ref` (`witnessbox` mode, CLI-only): takes `--ebt-sha` from the tip of trusted `--ebt-ref` and computes `--approved-tree` directly from its Git objects (cannot be combined with `--ebt-sha` or `--approved-tree`).
+- `--inv` (`witnessbox` mode): optional. When omitted, runs the full `ebt/spec.toml` suite: in `bugfix` policy, any violated invariant (`FALSE_PROOF` / `CONFIRMED_VIOLATION`) on `base` is inferred automatically and `repro` must fail on at least one of those same invariants before `head` passes; in `refactor` policy, all invariants must pass on both `base` and `head`. Passing an explicit empty `--inv ""` still rejects with `no-invariants`.
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
 

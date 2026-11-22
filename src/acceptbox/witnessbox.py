@@ -145,7 +145,7 @@ def classify_gate_run(run_dir: Path, commit_sha: str, approved_spec_sha256: str,
     Чистая функция от run_dir: тестируется на файлах без subprocess.
     """
     run_dir = Path(run_dir)
-    expected = set(expected_invariants or ())
+    expected = None if expected_invariants is None else set(expected_invariants)
     gate_path = run_dir / "gate.json"
     report_path = run_dir / "report.json"
 
@@ -232,7 +232,7 @@ def classify_gate_run(run_dir: Path, commit_sha: str, approved_spec_sha256: str,
 
 def run_commit(worktree: Path, commit_sha: str, run_dir: Path, env: dict[str, str],
                timeout: float, *, ebt_dir: Path, approved_spec_sha256: str,
-               expected_invariants: list[str], installation_info: dict,
+               expected_invariants: list[str] | None, installation_info: dict,
                witnessbox_bin: str = "witnessbox") -> RunOutcome:
     """Прогон одного коммита: ``witnessbox gate <ebt_dir> <worktree> <run_dir>``."""
     run_dir = Path(run_dir)

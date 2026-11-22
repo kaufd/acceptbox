@@ -197,14 +197,10 @@ acceptbox accept --base-ref main
 
 *(Для рефакторингов: `acceptbox accept --policy refactor --base-ref main`. Если до `repro` были вспомогательные коммиты, добавьте trailer `AcceptBox-Role: repro` в сообщение `repro`-коммита или передайте `--repro "$REPRO"` явно.)*
 
-Режим `witnessbox` (с явными `--ebt-sha` / `--approved-tree` или с `--pin-from-ref` для локального запуска):
+Режим `witnessbox` (локально с `--pin-from-ref`, либо с явными `--ebt-sha` / `--approved-tree`; `--inv` опционален — если его опустить, инвариант определится автоматически по `base` → `repro`):
 
 ```sh
-acceptbox accept \
-  --mode witnessbox \
-  --base-ref main \
-  --inv <INV-IDs> \
-  --pin-from-ref
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 
 ## 5. Разбор результатов (`accept.json`)

@@ -204,14 +204,10 @@ acceptbox accept --base-ref main
 
 *(For refactorings: `acceptbox accept --policy refactor --base-ref main`. If your branch has helper commits before the repro commit, add `AcceptBox-Role: repro` as a trailer in the repro commit message, or pass `--repro "$REPRO"` explicitly.)*
 
-`witnessbox` mode (either using explicit `--ebt-sha` / `--approved-tree` or `--pin-from-ref` for local runs):
+`witnessbox` mode (either with `--pin-from-ref` locally, or explicit `--ebt-sha` / `--approved-tree`; `--inv` is optional and auto-inferred from `base` → `repro` when omitted):
 
 ```sh
-acceptbox accept \
-  --mode witnessbox \
-  --base-ref main \
-  --inv <INV-IDs> \
-  --pin-from-ref
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 
 ## 5. Diagnosing results (`accept.json`)

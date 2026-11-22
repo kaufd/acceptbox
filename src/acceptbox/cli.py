@@ -374,7 +374,12 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "exit_code": verdict.exit_code,
             "reason_code": verdict.reason_code,
             "message": verdict.message,
-            "coverage": coverage_override or coverage(mode, inv_list or [], findings_inv),
+            "coverage": coverage_override or coverage(
+                mode,
+                sorted(set(findings_inv)) if (mode == "witnessbox" and inv_list is None)
+                else (inv_list or []),
+                findings_inv,
+            ),
         }
         report_path = atomic_write_json(out_path, "accept.json", payload)
         stream = sys.stdout if verdict.exit_code == 0 else sys.stderr
@@ -527,12 +532,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                         "в режиме command обязательна команда после -- "
                                         "(или [command].argv в .acceptbox.toml)")
                             else:
-                                if cli_inv_list is None:
-                                    if policy == "bugfix":
-                                        raise InputError("в режиме witnessbox обязателен флаг --inv")
-                                    inv_list = []
-                                else:
-                                    inv_list = cli_inv_list
+                                inv_list = cli_inv_list
                                 ebt_repo = (cli_ebt_repo
                                             or (project_config.witnessbox_ebt_repo
                                                 if project_config else None)
@@ -566,7 +566,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         env, env_keys = build_runtime_env(
                             os.environ, merged_env_entries,
                             base_sha=base if mode == "witnessbox" else None,
-                            inv_csv=",".join(inv_list) if mode == "witnessbox" else None,
+                            inv_csv=",".join(inv_list or []) if mode == "witnessbox" else None,
                         )
 
                         # Стадия 3b: witnessbox --installation (только для witnessbox).
@@ -590,11 +590,10 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                 return finish(error_verdict("gate-error",
                                                             witnessbox_status.message))
 
-                        # Стадия 4: пустой --inv → no-invariants (код 1, прогоны не запускаются).
-                        # В политике refactor --inv можно опустить (проверка всей спецификации),
-                        # но явно переданный пустой --inv "" всё равно отклоняется (fail-closed).
-                        if mode == "witnessbox" and not inv_list and (
-                                policy == "bugfix" or cli_inv_list is not None):
+                        # Стадия 4: явно пустой --inv → no-invariants (код 1, прогоны не запускаются).
+                        # При опущенном --inv (cli_inv_list is None) инвариант определяется
+                        # автоматически по прогону base и сверяется на repro (L30).
+                        if mode == "witnessbox" and cli_inv_list is not None and not cli_inv_list:
                             checks["ebt_trust"] = {"status": "skipped", "reason": "no-invariants"}
                             return finish(no_invariants(),
                                           {"checked": [], "skipped": [],
@@ -733,6 +732,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 
                         # Стадия 10: последовательные fail-fast прогоны.
                         executed: list[tuple[str, RunOutcome]] = []
+                        inferred_invs: list[str] | None = None
                         if policy == "refactor":
                             order: tuple[str, ...] = ("base", "head")
                         else:
@@ -749,18 +749,24 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                 outcome = run_command_commit(worktree, commit_sha, run_dir,
                                                              env, timeout, cmd_argv=cmd)
                             else:
+                                expected_for_run = (
+                                    inv_list if inv_list is not None else inferred_invs
+                                )
                                 outcome = run_witnessbox_commit(
                                     worktree, commit_sha, run_dir, env, timeout,
                                     ebt_dir=ebt_dir, approved_spec_sha256=spec_sha,
-                                    expected_invariants=inv_list, installation_info=wb_info,
-                                    witnessbox_bin=wb_bin)
+                                    expected_invariants=expected_for_run,
+                                    installation_info=wb_info, witnessbox_bin=wb_bin)
                             runs[name] = completed_run(
                                 commit_sha, outcome,
                                 log_path=f"runs/{name}/{outcome.log_path}",
                                 artifacts=_relative_artifacts(name, outcome))
                             executed.append((name, outcome))
                             if outcome.status == "red":
-                                findings_inv.extend(read_findings_inv(run_dir))
+                                run_invs = read_findings_inv(run_dir)
+                                findings_inv.extend(run_invs)
+                                if name == "base" and inv_list is None:
+                                    inferred_invs = sorted(set(run_invs))
                             step = run_verdict(name, outcome, policy=policy)
                             if step is not None:
                                 return finish(step)
@@ -837,8 +843,6 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                 if not cmd_argv:
                     raise InputError("в режиме command после -- обязательна непустая команда")
             else:
-                if cli_inv_list is None:
-                    raise InputError("в режиме witnessbox обязателен флаг --inv")
                 if cli_ebt_ref is None:
                     raise InputError("в режиме witnessbox обязателен флаг --ebt-ref")
                 if cli_ebt_sha is None:
@@ -969,8 +973,6 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                         "в режиме command обязательна команда после -- "
                                         "(или [command].argv в .acceptbox.toml при --base)")
                             else:
-                                if cli_inv_list is None:
-                                    raise InputError("в режиме witnessbox обязателен флаг --inv")
                                 inv_list = cli_inv_list
                                 ebt_repo = (cli_ebt_repo
                                             or (project_config.witnessbox_ebt_repo
@@ -999,7 +1001,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         env, env_keys = build_runtime_env(
                             os.environ, merged_env_entries,
                             base_sha=base if mode == "witnessbox" else None,
-                            inv_csv=",".join(inv_list) if mode == "witnessbox" else None,
+                            inv_csv=",".join(inv_list or []) if mode == "witnessbox" else None,
                         )
 
                         if mode == "witnessbox":
@@ -1021,7 +1023,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             if witnessbox_status.status == "error":
                                 return finish("ERROR", 2, "gate-error",
                                               witnessbox_status.message)
-                            if not inv_list:
+                            if cli_inv_list is not None and not cli_inv_list:
                                 return finish("FAILED", 1, "no-invariants",
                                               "--inv не содержит ни одного инварианта")
 

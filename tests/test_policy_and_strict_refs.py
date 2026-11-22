@@ -500,6 +500,55 @@ class TestLocalAutoResolve(unittest.TestCase):
             self.assertEqual(data["inputs"]["ebt"]["sha"], fx["ebt_sha"])
             self.assertEqual(data["inputs"]["ebt"]["approved_tree_sha256"], fx["approved_tree"])
 
+    def test_witnessbox_bugfix_infers_invariant_from_base_and_rejects_mismatch_on_repro(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            repo = tmp / "repo"
+            _init_repo(repo)
+            (repo / "ebt").mkdir()
+            (repo / "ebt" / "spec.toml").write_text('[inv.INV-X]\nstatement = "ok"\n', encoding="utf-8")
+            (repo / "wb_state").write_text("red\n", encoding="utf-8")
+            (repo / ".acceptbox.toml").write_text(
+                'format = 1\nmode = "witnessbox"\n\n[witnessbox]\nebt_ref = "main"\n',
+                encoding="utf-8",
+            )
+            base = _commit(repo, "base")
+            _git(repo, "checkout", "-q", "-b", "fix/auto-inv")
+
+            # Matching invariant on base (INV-X) and repro (INV-X) -> ACCEPTED without --inv
+            (repo / "note.txt").write_text("repro\n", encoding="utf-8")
+            _commit(repo, "repro")
+            (repo / "wb_state").write_text("green\n", encoding="utf-8")
+            _commit(repo, "fix")
+
+            env = _install_fake_witnessbox(tmp)
+            out1 = tmp / "out1"
+            res1 = _run_cli(
+                ["accept", "--base-ref", "main", "--pin-from-ref", "--out", str(out1)],
+                env=env, cwd=repo,
+            )
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            data1 = json.loads((out1 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data1["result"], "ACCEPTED")
+            self.assertIsNone(data1["inputs"]["inv"])
+            self.assertEqual(data1["coverage"]["checked"], ["INV-X"])
+
+            # Different invariant on repro (INV-FOREIGN vs INV-X on base) -> repro-red-wrong-reason
+            _git(repo, "checkout", "-q", "-b", "fix/wrong-inv", base)
+            (repo / "wb_state").write_text("red-foreign\n", encoding="utf-8")
+            _commit(repo, "repro wrong inv")
+            (repo / "wb_state").write_text("green\n", encoding="utf-8")
+            _commit(repo, "fix")
+
+            out2 = tmp / "out2"
+            res2 = _run_cli(
+                ["accept", "--base-ref", "main", "--pin-from-ref", "--out", str(out2)],
+                env=env, cwd=repo,
+            )
+            self.assertEqual(res2.returncode, 1, res2.stderr)
+            data2 = json.loads((out2 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data2["reason_code"], "repro-red-wrong-reason")
+
 
 if __name__ == "__main__":
     unittest.main()
