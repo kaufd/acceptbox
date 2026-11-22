@@ -85,12 +85,12 @@ def run_git(repo: Path | None, env: dict[str, str], *args: str,
     try:
         result = subprocess.run(argv, env=env, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as error:
-        raise GitError(f"git {args[0]}: превышен таймаут {timeout:g} с") from error
+        raise GitError(f"git {args[0]}: timed out after {timeout:g}s") from error
     except OSError as error:
-        raise GitError(f"не удалось запустить git: {error}") from error
+        raise GitError(f"failed to start git: {error}") from error
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-        message = f"git {' '.join(args[:2])}: код {result.returncode}"
+        message = f"git {' '.join(args[:2])}: exit code {result.returncode}"
         raise GitError(f"{message}: {detail[-1]}" if detail else message)
     return result.stdout
 
@@ -189,7 +189,7 @@ def resolve_repo_head(source: str, env: dict[str, str]) -> str:
         output = run_git(local_path, env, "rev-parse", "--verify", "HEAD^{commit}")
         sha = output.strip().decode("ascii", "replace")
         if not sha:
-            raise GitError(f"не удалось разрешить HEAD в {source}")
+            raise GitError(f"failed to resolve HEAD in {source}")
         return sha
     output = run_git(None, env, "-c", "core.hooksPath=/dev/null",
                      "ls-remote", "--", source, "HEAD")
@@ -197,7 +197,7 @@ def resolve_repo_head(source: str, env: dict[str, str]) -> str:
         parts = line.split("\t", 1)
         if len(parts) == 2 and parts[1] == "HEAD" and parts[0]:
             return parts[0]
-    raise GitError(f"ссылка HEAD не найдена в репозитории {source}")
+    raise GitError(f"ref HEAD not found in repository {source}")
 
 
 def trusted_ref_source(source: str, env: dict[str, str]) -> tuple[str, str]:
@@ -220,11 +220,11 @@ def trusted_ref_source(source: str, env: dict[str, str]) -> tuple[str, str]:
         return os.path.abspath(source), "local"
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-        message = f"git remote get-url origin: код {result.returncode}"
+        message = f"git remote get-url origin: exit code {result.returncode}"
         raise GitError(f"{message}: {detail[-1]}" if detail else message)
     url = result.stdout.strip().decode("utf-8", "replace")
     if not url or url.startswith("-") or any(ord(char) < 32 for char in url):
-        raise GitError(f"недопустимый URL remote origin в {source}: {url!r}")
+        raise GitError(f"invalid remote origin URL in {source}: {url!r}")
     if not is_remote_source(url) and not os.path.isabs(url):
         url = os.path.normpath(os.path.join(os.path.abspath(source), url))
     return url, "origin"
@@ -272,15 +272,15 @@ def is_ancestor(repo: Path, env: dict[str, str], ancestor: str, descendant: str)
         result = subprocess.run(argv, env=env, capture_output=True,
                                 timeout=GIT_TIMEOUT_SEC, check=False)
     except subprocess.TimeoutExpired as error:
-        raise GitError("git merge-base: превышен таймаут") from error
+        raise GitError("git merge-base: timed out") from error
     except OSError as error:
-        raise GitError(f"не удалось запустить git: {error}") from error
+        raise GitError(f"failed to start git: {error}") from error
     if result.returncode == 0:
         return True
     if result.returncode == 1:
         return False
     detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-    message = f"git merge-base --is-ancestor: код {result.returncode}"
+    message = f"git merge-base --is-ancestor: exit code {result.returncode}"
     raise GitError(f"{message}: {detail[-1]}" if detail else message)
 
 
@@ -292,16 +292,16 @@ def merge_base(repo: Path, env: dict[str, str], commit_a: str, commit_b: str) ->
         result = subprocess.run(argv, env=env, capture_output=True,
                                 timeout=GIT_TIMEOUT_SEC, check=False)
     except subprocess.TimeoutExpired as error:
-        raise GitError("git merge-base: превышен таймаут") from error
+        raise GitError("git merge-base: timed out") from error
     except OSError as error:
-        raise GitError(f"не удалось запустить git: {error}") from error
+        raise GitError(f"failed to start git: {error}") from error
     if result.returncode == 0:
         sha = result.stdout.strip().decode("ascii", "replace").lower()
         return sha or None
     if result.returncode == 1:
         return None
     detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
-    message = f"git merge-base: код {result.returncode}"
+    message = f"git merge-base: exit code {result.returncode}"
     raise GitError(f"{message}: {detail[-1]}" if detail else message)
 
 

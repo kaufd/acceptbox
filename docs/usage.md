@@ -99,12 +99,12 @@ acceptbox accept --policy refactor --base-ref main
 The summary line is what a human actually reads, so everything that changes the meaning of the verdict is printed there, not only in `accept.json` (L31):
 
 ```text
-acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим проверкам нет; сохранение поведения не проверяется (policy=refactor) (отчёт: /tmp/.../accept.json)
-acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref 'main' (1a2b3c4d5e6f), а не по одобренному --approved-tree (--pin-from-ref)
+acceptbox: ACCEPTED [policy=refactor]: no regressions against existing checks; behaviour preservation is not verified (policy=refactor) (report: /tmp/.../accept.json)
+acceptbox: warning: ebt/ pinned to tip of --ebt-ref 'main' (1a2b3c4d5e6f), not an approved --approved-tree (--pin-from-ref)
 ```
 
 - `[policy=…]` is always printed after the result.
-- `acceptbox: внимание: …` lines follow for: `--pin-from-ref` (pinned, not approved `ebt/`), `ref_source_kind: "local"` for `--base-ref` / `--ebt-ref` (weak check), and an auto-picked `first-commit` repro. The same texts are stored in `accept.json` → `warnings`.
+- `acceptbox: warning: …` lines follow for: `--pin-from-ref` (pinned, not approved `ebt/`), `ref_source_kind: "local"` for `--base-ref` / `--ebt-ref` (weak check), and an auto-picked `first-commit` repro. The same texts are stored in `accept.json` → `warnings`.
 
 ### `command` mode
 
@@ -216,7 +216,7 @@ acceptbox render /tmp/accept-run/accept.json --format html --out /tmp/accept-run
 ```
 
 - **Pure function of the JSON report:** `render` does not invoke `git` or any subprocess and does not read external run logs from disk.
-- **L31 verdict visibility:** the top banner shows `result`, `[policy=…]` (for `accept`), `mode`, `reason_code`, and `message`; any `warnings` are shown prominently right below the banner and are never collapsed.
+- **L31 verdict visibility & layout:** the top banner shows `result`, `[policy=…]` (for `accept`), `mode`, `reason_code`, and `message`; any `warnings` are shown prominently right below the banner and are never collapsed. `Checks` and `Runs` (or `Results` for `calibrate`) appear first; `Repository & Commits` and `Inputs & Configuration` start collapsed (`<details>`) and expand on click.
 - **Strict escaping:** all dynamic values are escaped with `html.escape(..., quote=True)` in HTML. In Markdown, free text (message, warnings, run reasons) has GFM specials backslash-escaped (`src/pkg/__init__.py` stays literal, `@name` notifies nobody), and identifiers are shown in code spans.
 - **Run log links (HTML):** `runs/...` log paths are clickable, relative to where the page is written (`--out`); on `stdout`, links assume the page is saved next to the report.
 - **Labels:** section and table labels are English; `message`, `warnings`, and reasons are shown verbatim.

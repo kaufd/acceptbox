@@ -197,7 +197,7 @@ acceptbox accept --base-ref main
 
 *(Для рефакторингов: `acceptbox accept --policy refactor --base-ref main`. Если до `repro` были вспомогательные коммиты, добавьте trailer `AcceptBox-Role: repro` в сообщение `repro`-коммита или передайте `--repro "$REPRO"` явно.)*
 
-Отдайте результат туда, где его читает человек: выполните `acceptbox render <путь к accept.json> --format md` (путь выводится после `отчёт:`) и вставьте вывод в отчёт или PR. В нём уже есть вердикт, `[policy=…]`, предупреждения, SHA и `ref_source_kind`. Если `render` запустить нельзя, приведите итоговую строку `acceptbox:` и все строки `acceptbox: внимание:` дословно.
+Отдайте результат туда, где его читает человек: выполните `acceptbox render <путь к accept.json> --format md` (путь выводится после `report:`) и вставьте вывод в отчёт или PR. В нём уже есть вердикт, `[policy=…]`, предупреждения, SHA и `ref_source_kind`. Если `render` запустить нельзя, приведите итоговую строку `acceptbox:` и все строки `acceptbox: warning:` дословно.
 
 Режим `witnessbox` (локально с `--pin-from-ref`, либо с явными `--ebt-sha` / `--approved-tree`; `--inv` опционален — если его опустить, инвариант определится автоматически по `base` → `repro`):
 

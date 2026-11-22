@@ -24,44 +24,44 @@ ENV_ALLOWLIST = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG",
 def validate_commit_sha(value: str, flag: str) -> str:
     """Полный SHA коммита Git (40 или 64 hex), нормализованный в нижний регистр."""
     if not isinstance(value, str) or not _SHA_RE.fullmatch(value):
-        raise InputError(f"{flag} должен быть полным SHA коммита Git (40 или 64 hex-символа)")
+        raise InputError(f"{flag} must be a full Git commit SHA (40 or 64 hex characters)")
     return value.lower()
 
 
 def validate_sha256(value: str, flag: str) -> str:
     """SHA-256 (64 hex), нормализованный в нижний регистр."""
     if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
-        raise InputError(f"{flag} должен содержать SHA-256 (64 hex-символа)")
+        raise InputError(f"{flag} must be a SHA-256 hex digest (64 hex characters)")
     return value.lower()
 
 
 def validate_timeout(value: str | int | float, flag: str = "--timeout") -> float:
     """Положительное конечное число секунд."""
     if isinstance(value, bool):
-        raise InputError(f"{flag} должен быть положительным числом секунд")
+        raise InputError(f"{flag} must be a positive number of seconds")
     try:
         timeout = float(value)
     except (TypeError, ValueError):
-        raise InputError(f"{flag} должен быть положительным числом секунд") from None
+        raise InputError(f"{flag} must be a positive number of seconds") from None
     if not math.isfinite(timeout) or timeout <= 0:
-        raise InputError(f"{flag} должен быть конечным положительным числом секунд")
+        raise InputError(f"{flag} must be a finite positive number of seconds")
     return timeout
 
 
 def validate_pathspec(value: str, flag: str) -> str:
     """Непустой pathspec без отрицающей магии (``:!``, ``:^``, ``:(exclude)``)."""
     if not isinstance(value, str) or not value.strip():
-        raise InputError(f"{flag}: pathspec пуст")
+        raise InputError(f"{flag}: pathspec is empty")
     if value.startswith(":"):
         magic = value[1:]
         if magic.startswith("("):
             end = magic.find(")")
             if end < 0:
-                raise InputError(f"{flag}: незакрытый pathspec magic")
+                raise InputError(f"{flag}: unclosed pathspec magic")
             keywords = [item.strip().lower() for item in magic[1:end].split(",")]
             if any(item.startswith(("!", "^")) or item.lstrip("!^") == "exclude"
                    for item in keywords):
-                raise InputError(f"{flag}: pathspec с отрицающей магией (exclude) не допускается")
+                raise InputError(f"{flag}: negative pathspec magic (exclude) is not allowed")
         else:
             # Короткая магия pathspec (/, !, ^) идёт до первого символа пути или ':'.
             short = []
@@ -71,7 +71,7 @@ def validate_pathspec(value: str, flag: str) -> str:
                 else:
                     break
             if "!" in short or "^" in short:
-                raise InputError(f"{flag}: pathspec с отрицающей магией (!/^) не допускается")
+                raise InputError(f"{flag}: negative pathspec magic (!/^) is not allowed")
     return value
 
 
@@ -82,38 +82,38 @@ def validate_repo_source(value: str, flag: str) -> str:
     резолв HEAD, клонирование и отчёт.
     """
     if not isinstance(value, str) or not value.strip():
-        raise InputError(f"{flag}: укажите путь или URL репозитория")
+        raise InputError(f"{flag}: specify a repository path or URL")
     if value.startswith("-"):
-        raise InputError(f"{flag}: значение не может начинаться с '-'")
+        raise InputError(f"{flag}: value cannot start with '-'")
     if "\x00" in value or any(ord(char) < 32 for char in value):
-        raise InputError(f"{flag}: недопустимые управляющие символы")
+        raise InputError(f"{flag}: invalid control characters")
     return os.path.expanduser(value)
 
 
 def validate_ref(value: str, flag: str) -> str:
     """Имя ветки или полной ссылки без refspec-синтаксиса и недопустимых символов."""
     if not isinstance(value, str) or not value.strip():
-        raise InputError(f"{flag}: укажите ветку или ссылку")
+        raise InputError(f"{flag}: specify a branch or ref")
     if value.startswith(("-", ":")):
-        raise InputError(f"{flag}: значение не может начинаться с '-' или ':'")
+        raise InputError(f"{flag}: value cannot start with '-' or ':'")
     if "\x00" in value or any(char.isspace() or ord(char) < 32 for char in value):
-        raise InputError(f"{flag}: недопустимые символы в ссылке")
+        raise InputError(f"{flag}: invalid characters in ref")
     for fragment in ("..", "@{", ":", "*", "?", "[", "//", "/."):
         if fragment in value:
-            raise InputError(f"{flag}: недопустимые символы в ссылке")
+            raise InputError(f"{flag}: invalid characters in ref")
     if value.endswith(("/", ".", ".lock")):
-        raise InputError(f"{flag}: недопустимое имя ссылки")
+        raise InputError(f"{flag}: invalid ref name")
     return value
 
 
 def validate_env_key(key: str, flag: str = "--env") -> None:
     """Запрещённые имена: BASE (задаётся автоматически), EBT_*, git-изоляция."""
     if key == "BASE":
-        raise InputError(f"{flag}: BASE задаётся автоматически из --base")
+        raise InputError(f"{flag}: BASE is set automatically from --base")
     if key.startswith("EBT_"):
-        raise InputError(f"{flag}: переменные EBT_* запрещены")
+        raise InputError(f"{flag}: EBT_* variables are forbidden")
     if key in local_env_var_names():
-        raise InputError(f"{flag}: переменные git-изоляции ({key}) запрещены")
+        raise InputError(f"{flag}: git isolation variable ({key}) is forbidden")
 
 
 def parse_env_entry(entry: str, flag: str = "--env") -> tuple[str, str | None]:
@@ -122,14 +122,14 @@ def parse_env_entry(entry: str, flag: str = "--env") -> tuple[str, str | None]:
     Возвращает (имя, значение или None для проброса из окружения).
     """
     if not isinstance(entry, str) or not entry:
-        raise InputError(f"{flag}: пустая запись")
+        raise InputError(f"{flag}: empty entry")
     if "\x00" in entry:
-        raise InputError(f"{flag}: недопустимые управляющие символы")
+        raise InputError(f"{flag}: invalid control characters")
     key, separator, value = entry.partition("=")
     if not key:
-        raise InputError(f"{flag}: имя переменной пустое")
+        raise InputError(f"{flag}: variable name is empty")
     if any(char.isspace() or ord(char) < 32 for char in key):
-        raise InputError(f"{flag}: некорректное имя переменной {key!r}")
+        raise InputError(f"{flag}: invalid variable name {key!r}")
     validate_env_key(key, flag)
     return key, (value if separator else None)
 

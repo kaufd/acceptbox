@@ -612,16 +612,26 @@ class TestRenderCore(unittest.TestCase):
         self.assertIn(payload["message"], visible)
         self.assertIn("## Warnings", md)
         self.assertIn(warning_text, visible)
-        # Warnings appear near the top — before Repository/Checks/Runs sections
-        self.assertLess(visible.index(warning_text), visible.index("## Repository & Commits"))
+        # Warnings appear near the top — never collapsed, before Checks/Runs/Repository sections
+        self.assertLess(visible.index(warning_text), visible.index("## Checks"))
+        self.assertLess(visible.index("## Checks"), visible.index("## Runs"))
+        self.assertLess(visible.index("## Runs"), visible.index("<summary><strong>Repository &amp; Commits</strong></summary>"))
+        self.assertLess(visible.index("<summary><strong>Repository &amp; Commits</strong></summary>"),
+                        visible.index("<summary><strong>Inputs &amp; Configuration</strong></summary>"))
         self.assertIn("`refactor`", md)
         self.assertIn("src/service.py", md)
         self.assertIn("src/helper.py", md)
 
         self.assertIn("[policy=refactor]", html_doc)
         self.assertIn(warning_text, html_doc)
-        self.assertNotIn("<details", html_doc.lower())
-        self.assertLess(html_doc.index(warning_text), html_doc.index("Repository &amp; Commits"))
+        # Warnings stay in an always-visible section above all collapsible details
+        self.assertLess(html_doc.index(warning_text), html_doc.index("<details"))
+        self.assertLess(html_doc.index(warning_text), html_doc.index("<h2>Checks</h2>"))
+        self.assertLess(html_doc.index("<h2>Checks</h2>"), html_doc.index("<h2>Runs</h2>"))
+        self.assertLess(html_doc.index("<h2>Runs</h2>"),
+                        html_doc.index('<details class="card"><summary>Repository &amp; Commits</summary>'))
+        self.assertLess(html_doc.index('<details class="card"><summary>Repository &amp; Commits</summary>'),
+                        html_doc.index('<details class="card"><summary>Inputs &amp; Configuration</summary>'))
         self.assertIn("src/service.py", html_doc)
 
     def test_accept_rejected_with_protected_and_repro_test_diffs(self) -> None:
@@ -679,14 +689,16 @@ class TestRenderCore(unittest.TestCase):
         self.assertIn("## Coverage", md)
         self.assertIn("<h2>WitnessBox</h2>", html_doc)
         self.assertIn("<h2>Coverage</h2>", html_doc)
-        # Both warnings appear prominently before Repository section (escaped in HTML)
+        # Both warnings appear prominently before Checks/Runs/Repository sections (escaped in HTML)
         for warning in payload["warnings"]:
             escaped_warning = html.escape(warning, quote=True)
             visible = _md_visible(md)
             self.assertIn(warning, visible)
             self.assertIn(escaped_warning, html_doc)
-            self.assertLess(visible.index(warning), visible.index("## Repository & Commits"))
-            self.assertLess(html_doc.index(escaped_warning), html_doc.index("Repository &amp; Commits"))
+            self.assertLess(visible.index(warning), visible.index("## Checks"))
+            self.assertLess(visible.index("## Checks"), visible.index("Repository &amp; Commits"))
+            self.assertLess(html_doc.index(escaped_warning), html_doc.index("<h2>Checks</h2>"))
+            self.assertLess(html_doc.index("<h2>Checks</h2>"), html_doc.index("Repository &amp; Commits"))
 
     def test_calibrate_calibrated_and_failed(self) -> None:
         ok_payload = _calibrate_payload(matched_second=True)
@@ -710,6 +722,59 @@ class TestRenderCore(unittest.TestCase):
         self.assertIn("`false`", md_fail)
         self.assertIn("banner-fail", html_fail)
         self.assertIn("mismatch", html_fail)
+        self.assertLess(md_ok.index("## Results"), md_ok.index("Repository &amp; Commits"))
+        self.assertLess(html_ok.index("<h2>Results</h2>"),
+                        html_ok.index('<details class="card"><summary>Repository &amp; Commits</summary>'))
+
+    def test_layout_order_collapsible_sections_and_nowrap_first_column(self) -> None:
+        payload = _accept_bugfix_payload()
+        html_doc = render.render_html(payload)
+        md = render.render_markdown(payload)
+
+        # Checks and Runs are expanded sections above collapsed Repository & Inputs
+        self.assertIn('<section class="card"><h2>Checks</h2>', html_doc)
+        self.assertIn('<section class="card"><h2>Runs</h2>', html_doc)
+        self.assertIn('<details class="card"><summary>Repository &amp; Commits</summary>', html_doc)
+        self.assertIn('<details class="card"><summary>Inputs &amp; Configuration</summary>', html_doc)
+        self.assertNotIn('<details class="card" open', html_doc)
+        self.assertLess(html_doc.index("<h2>Checks</h2>"), html_doc.index("<h2>Runs</h2>"))
+        self.assertLess(html_doc.index("<h2>Runs</h2>"),
+                        html_doc.index("<summary>Repository &amp; Commits</summary>"))
+        self.assertLess(html_doc.index("<summary>Repository &amp; Commits</summary>"),
+                        html_doc.index("<summary>Inputs &amp; Configuration</summary>"))
+
+        # First column prevents wrapping short identifiers like protected_paths / repro
+        self.assertIn("td:first-child {", html_doc)
+        self.assertIn("td:first-child code,", html_doc)
+        self.assertIn("word-break: normal;", html_doc)
+
+        # Same ordering and collapsible metadata in Markdown
+        _assert_valid_markdown_tables(self, md)
+        self.assertLess(md.index("## Checks"), md.index("## Runs"))
+        self.assertLess(md.index("## Runs"), md.index("<details>\n<summary><strong>Repository &amp; Commits</strong></summary>"))
+        self.assertLess(md.index("Repository &amp; Commits"), md.index("Inputs &amp; Configuration"))
+
+    def test_runtime_messages_are_english_only(self) -> None:
+        """All user-facing runtime strings in src/acceptbox/ stay in English (L33)."""
+        import ast
+
+        cyrillic = re.compile(r"[А-Яа-яЁё]")
+        pkg_dir = Path(SRC_DIR) / "acceptbox"
+        offenders: list[str] = []
+        for path in sorted(pkg_dir.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            doc_ids: set[int] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if (node.body and isinstance(node.body[0], ast.Expr)
+                            and isinstance(node.body[0].value, ast.Constant)
+                            and isinstance(node.body[0].value.value, str)):
+                        doc_ids.add(id(node.body[0].value))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and id(node) not in doc_ids and cyrillic.search(node.value)):
+                    offenders.append(f"{path.name}:L{node.lineno}: {node.value!r}")
+        self.assertEqual(offenders, [])
 
     def test_escaping_html_and_markdown_tables(self) -> None:
         xss = "<script>alert(1)</script> & \"quote\" 'single' | col\nnextline\r\n`tick`"
@@ -886,7 +951,7 @@ class TestRenderCLI(unittest.TestCase):
             report_path.write_text(original, encoding="utf-8")
             res = _run_cli(["render", str(report_path), "--format", "md", "--out", str(report_path)])
             self.assertEqual(res.returncode, 2)
-            self.assertIn("совпадает с исходным отчётом", res.stderr)
+            self.assertIn("points to the source report", res.stderr)
             self.assertEqual(report_path.read_text(encoding="utf-8"), original)
 
     def test_cli_renders_real_accept_report_with_working_log_links(self) -> None:

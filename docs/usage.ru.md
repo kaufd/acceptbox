@@ -99,12 +99,12 @@ acceptbox accept --policy refactor --base-ref main
 Человек читает итоговую строку, а не `accept.json`, поэтому всё, что меняет смысл вердикта, выводится в ней (L31):
 
 ```text
-acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим проверкам нет; сохранение поведения не проверяется (policy=refactor) (отчёт: /tmp/.../accept.json)
-acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref 'main' (1a2b3c4d5e6f), а не по одобренному --approved-tree (--pin-from-ref)
+acceptbox: ACCEPTED [policy=refactor]: no regressions against existing checks; behaviour preservation is not verified (policy=refactor) (report: /tmp/.../accept.json)
+acceptbox: warning: ebt/ pinned to tip of --ebt-ref 'main' (1a2b3c4d5e6f), not an approved --approved-tree (--pin-from-ref)
 ```
 
 - `[policy=…]` выводится после результата всегда.
-- Строки `acceptbox: внимание: …` добавляются при: `--pin-from-ref` (`ebt/` закреплён, а не одобрен), `ref_source_kind: "local"` у `--base-ref` / `--ebt-ref` (слабая проверка) и автоматически выбранном repro (`first-commit`). Те же тексты сохраняются в `accept.json` → `warnings`.
+- Строки `acceptbox: warning: …` добавляются при: `--pin-from-ref` (`ebt/` закреплён, а не одобрен), `ref_source_kind: "local"` у `--base-ref` / `--ebt-ref` (слабая проверка) и автоматически выбранном repro (`first-commit`). Те же тексты сохраняются в `accept.json` → `warnings`.
 
 ### Режим `command`
 
@@ -216,7 +216,7 @@ acceptbox render /tmp/accept-run/accept.json --format html --out /tmp/accept-run
 ```
 
 - **Чистая функция от JSON-отчёта:** `render` не запускает `git` или подпроцессы и не читает внешние логи прогонов с диска.
-- **Видимость смысла вердикта (L31):** верхний баннер показывает `result`, `[policy=…]` (для `accept`), `mode`, `reason_code` и `message`; все `warnings` выводятся заметно сразу под баннером и никогда не сворачиваются.
+- **Видимость смысла вердикта (L31) и компоновка:** верхний баннер показывает `result`, `[policy=…]` (для `accept`), `mode`, `reason_code` и `message`; все `warnings` выводятся заметно сразу под баннером и никогда не сворачиваются. Блоки `Checks` и `Runs` (или `Results` для `calibrate`) идут первыми; `Repository & Commits` и `Inputs & Configuration` по умолчанию свёрнуты (`<details>`) и разворачиваются по клику.
 - **Строгое экранирование:** в HTML все динамические значения экранируются через `html.escape(..., quote=True)`. В Markdown в свободном тексте (message, предупреждения, причины прогонов) спецсимволы GFM экранируются обратной косой чертой (`src/pkg/__init__.py` остаётся как есть, `@name` никого не уведомляет), а идентификаторы выводятся в code span.
 - **Ссылки на логи прогонов (HTML):** пути `runs/...` кликабельны и строятся относительно места записи страницы (`--out`); при выводе в `stdout` считается, что страница сохраняется рядом с отчётом.
 - **Подписи:** заголовки секций и таблиц — на английском; `message`, `warnings` и причины выводятся дословно.

@@ -427,7 +427,7 @@ class TestLocalAutoResolve(unittest.TestCase):
             self.assertTrue(data["checks"]["base_ref"]["resolved_base_auto"])
             # The human sees the policy and the auto-picked repro in the CLI output itself.
             self.assertIn("acceptbox: ACCEPTED [policy=bugfix]", res.stdout)
-            self.assertIn("acceptbox: внимание: repro выбран автоматически", res.stdout)
+            self.assertIn("acceptbox: warning: repro auto-selected", res.stdout)
 
     def test_bugfix_repro_trailer_and_ambiguous_trailer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -509,10 +509,10 @@ class TestLocalAutoResolve(unittest.TestCase):
             self.assertIsNone(data["inputs"]["ebt"]["approved_tree_sha256"])
             self.assertEqual(data["inputs"]["ebt"]["actual_tree_sha256"], fx["approved_tree"])
             self.assertEqual(data["coverage"]["checked"], ["INV-1"])
-            self.assertIn("acceptbox: ACCEPTED [policy=refactor]: регрессий по существующим "
-                          "проверкам нет; сохранение поведения не проверяется", res.stdout)
-            self.assertIn("acceptbox: внимание: ebt/ закреплён по вершине --ebt-ref", res.stdout)
-            self.assertIn("--base-ref, --ebt-ref: ветка взята из локального репозитория",
+            self.assertIn("acceptbox: ACCEPTED [policy=refactor]: no regressions against existing "
+                          "checks; behaviour preservation is not verified", res.stdout)
+            self.assertIn("acceptbox: warning: ebt/ pinned to tip of --ebt-ref", res.stdout)
+            self.assertIn("--base-ref, --ebt-ref: ref resolved from local repository",
                           res.stdout)
 
     def test_witnessbox_bugfix_infers_invariant_from_base_and_rejects_mismatch_on_repro(self) -> None:

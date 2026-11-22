@@ -66,14 +66,14 @@ def _reject_unknown_keys(table: dict, allowed: frozenset[str], section: str) -> 
     unknown = sorted(set(table) - allowed)
     if unknown:
         raise ConfigError(
-            f"{CONFIG_FILENAME} ({section}): неизвестные ключи: {', '.join(unknown)}")
+            f"{CONFIG_FILENAME} ({section}): unknown keys: {', '.join(unknown)}")
 
 
 def _require_str_list(value: object, *, label: str, allow_empty: bool = True) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ConfigError(f"{label} должен быть списком строк")
+        raise ConfigError(f"{label} must be a list of strings")
     if not allow_empty and not value:
-        raise ConfigError(f"{label} не может быть пустым списком")
+        raise ConfigError(f"{label} cannot be an empty list")
     return value
 
 
@@ -84,34 +84,34 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ConfigError(f"{CONFIG_FILENAME}: некорректная кодировка UTF-8: {error}") from error
+        raise ConfigError(f"{CONFIG_FILENAME}: invalid UTF-8 encoding: {error}") from error
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"{CONFIG_FILENAME}: ошибка разбора TOML: {error}") from error
+        raise ConfigError(f"{CONFIG_FILENAME}: TOML parse error: {error}") from error
     if not isinstance(data, dict):
-        raise ConfigError(f"{CONFIG_FILENAME}: корень должен быть таблицей TOML")
+        raise ConfigError(f"{CONFIG_FILENAME}: root must be a TOML table")
 
-    _reject_unknown_keys(data, _TOP_KEYS, "верхний уровень")
+    _reject_unknown_keys(data, _TOP_KEYS, "top level")
 
     fmt = data.get("format")
     if type(fmt) is not int or fmt != CONFIG_FORMAT:
         raise ConfigError(
-            f"{CONFIG_FILENAME}: обязателен ключ format = {CONFIG_FORMAT} (получено: {fmt!r})")
+            f"{CONFIG_FILENAME}: required key format = {CONFIG_FORMAT} (got: {fmt!r})")
 
     mode: str | None = None
     if "mode" in data:
         raw_mode = data["mode"]
         if not isinstance(raw_mode, str) or raw_mode not in _VALID_MODES:
             raise ConfigError(
-                f"{CONFIG_FILENAME}: mode должен быть 'command' или 'witnessbox'")
+                f"{CONFIG_FILENAME}: mode must be 'command' or 'witnessbox'")
         mode = raw_mode
 
     timeout: float | None = None
     if "timeout" in data:
         raw_timeout = data["timeout"]
         if type(raw_timeout) not in (int, float):
-            raise ConfigError(f"{CONFIG_FILENAME}: timeout должен быть числом секунд")
+            raise ConfigError(f"{CONFIG_FILENAME}: timeout must be a number of seconds")
         try:
             timeout = validate_timeout(raw_timeout, flag=f"{CONFIG_FILENAME}: timeout")
         except InputError as error:
@@ -140,7 +140,7 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
     if "command" in data:
         cmd_table = data["command"]
         if not isinstance(cmd_table, dict):
-            raise ConfigError(f"{CONFIG_FILENAME}: секция [command] должна быть таблицей")
+            raise ConfigError(f"{CONFIG_FILENAME}: section [command] must be a table")
         _reject_unknown_keys(cmd_table, _COMMAND_KEYS, "[command]")
         if "tests" in cmd_table:
             raw_tests = _require_str_list(
@@ -161,10 +161,10 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
             )
             if not raw_argv[0].strip():
                 raise ConfigError(
-                    f"{CONFIG_FILENAME}: [command].argv[0] не может быть пустым")
+                    f"{CONFIG_FILENAME}: [command].argv[0] cannot be empty")
             if any("\x00" in item for item in raw_argv):
                 raise ConfigError(
-                    f"{CONFIG_FILENAME}: [command].argv содержит недопустимый NUL-байт")
+                    f"{CONFIG_FILENAME}: [command].argv contains invalid NUL byte")
             command_argv = list(raw_argv)
 
     wb_ebt_repo: str | None = None
@@ -172,13 +172,13 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
     if "witnessbox" in data:
         wb_table = data["witnessbox"]
         if not isinstance(wb_table, dict):
-            raise ConfigError(f"{CONFIG_FILENAME}: секция [witnessbox] должна быть таблицей")
+            raise ConfigError(f"{CONFIG_FILENAME}: section [witnessbox] must be a table")
         _reject_unknown_keys(wb_table, _WITNESSBOX_KEYS, "[witnessbox]")
         if "ebt_repo" in wb_table:
             raw_ebt_repo = wb_table["ebt_repo"]
             if not isinstance(raw_ebt_repo, str):
                 raise ConfigError(
-                    f"{CONFIG_FILENAME}: [witnessbox].ebt_repo должен быть строкой")
+                    f"{CONFIG_FILENAME}: [witnessbox].ebt_repo must be a string")
             try:
                 wb_ebt_repo = validate_repo_source(
                     raw_ebt_repo, flag=f"{CONFIG_FILENAME}: [witnessbox].ebt_repo")
@@ -187,13 +187,13 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
             # Относительный путь зависел бы от каталога запуска acceptbox, а не от --repo.
             if not is_remote_source(wb_ebt_repo) and not os.path.isabs(wb_ebt_repo):
                 raise ConfigError(
-                    f"{CONFIG_FILENAME}: [witnessbox].ebt_repo должен быть URL или "
-                    f"абсолютным путём (получено: {raw_ebt_repo!r})")
+                    f"{CONFIG_FILENAME}: [witnessbox].ebt_repo must be a URL or "
+                    f"an absolute path (got: {raw_ebt_repo!r})")
         if "ebt_ref" in wb_table:
             raw_ebt_ref = wb_table["ebt_ref"]
             if not isinstance(raw_ebt_ref, str):
                 raise ConfigError(
-                    f"{CONFIG_FILENAME}: [witnessbox].ebt_ref должен быть строкой")
+                    f"{CONFIG_FILENAME}: [witnessbox].ebt_ref must be a string")
             try:
                 wb_ebt_ref = validate_ref(
                     raw_ebt_ref, flag=f"{CONFIG_FILENAME}: [witnessbox].ebt_ref")
@@ -232,18 +232,18 @@ def load_config_from_file(config_path: Path) -> ProjectConfig:
     try:
         descriptor = os.open(path_str, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError as missing:
-        raise reject("файл не найден") from missing
+        raise reject("file not found") from missing
     except OSError as io_error:
         if os.path.islink(path_str):
-            raise reject("симлинк не допускается") from io_error
-        raise reject(f"не удалось открыть файл: {io_error}") from io_error
+            raise reject("symlinks are not allowed") from io_error
+        raise reject(f"failed to open file: {io_error}") from io_error
     with os.fdopen(descriptor, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise reject("должен быть обычным файлом")
+            raise reject("must be a regular file")
         try:
             raw = handle.read()
         except OSError as io_error:
-            raise reject(f"не удалось прочитать файл: {io_error}") from io_error
+            raise reject(f"failed to read file: {io_error}") from io_error
     try:
         return parse_config(raw, commit_sha=None, source_path=path_str)
     except ConfigError as error:
@@ -269,8 +269,8 @@ def load_config_from_commit(repo: Path, env: dict[str, str],
         mode_text = mode.decode("ascii", "replace")
         kind_text = kind.decode("ascii", "replace")
         error = ConfigError(
-            f"{CONFIG_FILENAME} в коммите {commit_sha} должен быть обычным файлом "
-            f"(получено: mode={mode_text}, kind={kind_text})"
+            f"{CONFIG_FILENAME} in commit {commit_sha} must be a regular file "
+            f"(got: mode={mode_text}, kind={kind_text})"
         )
         error.commit = commit_sha
         raise error

@@ -22,17 +22,17 @@ def _hash_tree(repo: Path, commit: str, env: dict[str, str]) -> str:
     try:
         kind = run_git(repo, env, "cat-file", "-t", f"{commit}^{{commit}}").strip()
     except GitError as error:
-        raise ValueError(f"--ebt-sha должен указывать на коммит: {error}") from error
+        raise ValueError(f"--ebt-sha must refer to a commit: {error}") from error
     if kind != b"commit":
-        raise ValueError("--ebt-sha должен указывать на коммит")
+        raise ValueError("--ebt-sha must refer to a commit")
 
     top = run_git(repo, env, "ls-tree", "-z", commit, "--", "ebt")
     entries = [entry for entry in top.split(b"\0") if entry]
     if not entries:
-        raise EbtPathMissing("путь ebt/ отсутствует в коммите")
+        raise EbtPathMissing("path ebt/ is missing in commit")
     entry_kind = entries[0].split(b"\t", 1)[0].split()[1]
     if entry_kind != b"tree":
-        raise EbtPathMissing("путь ebt/ в коммите не является каталогом")
+        raise EbtPathMissing("path ebt/ in commit is not a directory")
 
     listing = run_git(repo, env, "ls-tree", "--full-tree", "-r", "-t", "-z", f"{commit}:ebt")
     digest = hashlib.sha256()
@@ -59,9 +59,9 @@ def tree_sha256_in_repo(repo: Path, commit: str, env: dict[str, str]) -> str:
 def tree_sha256(repository: str, commit: str) -> str:
     """SHA-256 дерева ebt/ из объектов Git по полному SHA коммита."""
     if not _SHA_RE.fullmatch(commit):
-        raise ValueError("--ebt-sha должен содержать полный SHA коммита Git")
+        raise ValueError("--ebt-sha must be a full Git commit SHA")
     if repository.startswith("-"):
-        raise ValueError("репозиторий не может начинаться с '-'")
+        raise ValueError("repository cannot start with '-'")
     commit = commit.lower()
 
     env = base_env()
@@ -72,5 +72,5 @@ def tree_sha256(repository: str, commit: str) -> str:
         clone = Path(temp) / "repo"
         clone_no_checkout(repository, clone, env)
         if not ensure_commit(clone, env, repository, commit):
-            raise ValueError(f"коммит {commit} не найден в репозитории")
+            raise ValueError(f"commit {commit} not found in repository")
         return tree_sha256_in_repo(clone, commit, env)
