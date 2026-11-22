@@ -24,7 +24,7 @@ The runtime uses only the Python standard library (`>=3.11`) and has zero third-
 ### 1. Install
 
 ```sh
-uv tool install acceptbox==0.2.0
+uv tool install acceptbox
 acceptbox --installation
 ```
 
@@ -80,14 +80,14 @@ AcceptBox prints the verdict and the path to `accept.json` (created atomically i
 - **Bugfixes** (`command` or `witnessbox` mode): the primary use case for `base → repro → head`.
 - **Human-approved invariants** (`witnessbox` mode): works for both bugfixes and features when a human approves `ebt/spec.toml` before implementation.
 - **New features without an approved spec**: a failing `repro` test written by the same agent that writes the implementation does not give a strong guarantee — the agent can fit the test and the code to each other. Use a human-approved specification (`witnessbox` mode) and/or independent review.
-- **Refactorings** (`base` green → `head` green without `repro`): orthogonal to `--mode` and out of scope for the current `base → repro → head` workflow.
+- **Refactorings** (`--policy refactor`, `base` green → `head` green without `--repro`): orthogonal to `--mode`; verifies that both `base` and `head` pass while automatically protecting `.acceptbox.toml` and `[command].tests` (or `ebt/` and `tool/ebt_check` in `witnessbox` mode).
 
 ## Guarantees and limits
 
 AcceptBox enforces commit structure, file immutability, and clean-worktree execution, but it is **not an OS sandbox**: test commands run as the invoking OS user.
 
-- **`.acceptbox.toml` trust boundary:** the config is read only from `base` and auto-protected, so it is as trustworthy as `--base`. Pass `--base-ref main` (CLI-only) so AcceptBox checks that `--base` is an ancestor of `main` from `origin` *before* reading the config. Without `--base-ref`, `--base` must be supplied by the acceptor (human, CI, or external orchestrator), not by the agent under test.
-- **Local `.git/config` trust boundary:** for a local `--repo` / `--ebt-repo`, AcceptBox fetches `--base-ref` and `--ebt-ref` from remote `origin` (falling back to the local branch with `ref_source_kind: "local"` if no `origin` exists). An agent with write access to `.git/config` could repoint or remove `origin`. Always inspect `ref_source` and `ref_source_kind` in `accept.json`; for full assurance, run acceptance outside the agent's reach (CI) or pass `--repo` / `--ebt-repo` as repository URLs.
+- **`.acceptbox.toml` trust boundary:** the config is read only from `base` and auto-protected, so it is as trustworthy as `--base`. Pass `--base-ref main` (CLI-only) so AcceptBox checks that `--base` is an ancestor of `main` from `origin` *before* reading the config. Add `--strict-refs` in CI to reject weak `"local"` fallback refs fail-closed (`ref-source-local`). Without `--base-ref`, `--base` must be supplied by the acceptor (human, CI, or external orchestrator), not by the agent under test.
+- **Local `.git/config` trust boundary:** for a local `--repo` / `--ebt-repo`, AcceptBox fetches `--base-ref` and `--ebt-ref` from remote `origin` (falling back to the local branch with `ref_source_kind: "local"` if no `origin` exists, unless `--strict-refs` is passed). An agent with write access to `.git/config` could repoint or remove `origin`. Always inspect `ref_source` and `ref_source_kind` in `accept.json`; for full assurance, run acceptance outside the agent's reach (CI) or pass `--repo` / `--ebt-repo` as repository URLs.
 - **Test quality in `command` mode:** `command` mode proves that `repro` only touched `--tests`, failed with exit code `1`, and was not altered by `head`, which then passed with exit code `0`. Reviewing that the test actually tests the right thing remains a human check — or use `witnessbox` mode for independent invariant checking.
 - **Clean-worktree setup:** every commit runs in a fresh detached worktree with a sanitized environment. If your stack needs dependency installation or compilation, wrap it in a script that exits with code `>= 2` on setup failure and `1` *only* on test failure (see [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md)).
 
@@ -95,9 +95,10 @@ AcceptBox enforces commit structure, file immutability, and clean-worktree execu
 
 - [Quick start & onboarding](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) — step-by-step walkthrough for `command` mode, `witnessbox` mode, and `calibrate`.
 - [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
+- [Autonomous CI pipeline](https://github.com/kaufd/acceptbox/blob/main/docs/ci.md) — reusable GitHub Actions (`actions/setup` + `actions/accept`) for zero-operator bugfix and refactoring PR acceptance.
 - [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.
 - [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
-- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L29`).
+- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L30`).
 
 Documentation is available in English and Russian; every page links to its translation.
 

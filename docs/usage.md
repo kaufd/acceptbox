@@ -74,12 +74,21 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 - `--timeout`: from `.acceptbox.toml`, or `600` seconds.
 - `--out`: atomically creates a new empty directory in system `TMPDIR` and prints the path to `accept.json`. When `--out` is passed explicitly, it must be non-existent or empty (`O_EXCL` lock).
 
-### Trusted ref source (`--base-ref` and `--ebt-ref`)
+### Trusted ref source (`--base-ref`, `--ebt-ref`, and `--strict-refs`)
 
 - If the repository argument (`--repo` for `--base-ref`, `--ebt-repo` for `--ebt-ref`) is a URL or scp-like remote, the ref is fetched directly from it (`ref_source_kind: "remote"`).
 - If it is a local path, AcceptBox queries `git remote get-url origin` and fetches the ref from `origin` (`ref_source_kind: "origin"`), so an agent moving local branches cannot forge ancestry. Short ref names resolve `refs/heads/<ref>` first, then `refs/tags/<ref>`.
-- If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
-- **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI) / pass URLs for `--repo` and `--ebt-repo`.
+- If the local repository has no `origin` remote, AcceptBox falls back to the local repository and marks the report `ref_source_kind: "local"` (weak check). Pass `--strict-refs` (CLI-only, recommended in CI) to reject `"local"` fallback fail-closed with `ref-source-local` (exit code `1`). In `command` mode, `--strict-refs` requires `--base-ref`. Any other failure reading `origin` (e.g. `safe.directory`) is `gate-error`.
+- **Trust boundary:** `origin`'s URL lives in `.git/config` of the local checkout. Inspect `ref_source` and `ref_source_kind` in `accept.json`, or run acceptance outside the agent's reach (CI, see [docs/ci.md](ci.md)) / pass URLs for `--repo` and `--ebt-repo`.
+
+### Policies (`--policy bugfix` vs `--policy refactor`)
+
+- **`--policy bugfix` (default, CLI-only):** requires `--repro` and verifies `base → repro → head` (`repro` red, `head` green; in `witnessbox` mode `base` must also be red on `--inv`).
+- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`). In `witnessbox` + `refactor`, `--inv` is optional (checks all invariants when omitted).
+
+```sh
+acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git merge-base main HEAD)"
+```
 
 ### `command` mode
 
@@ -182,16 +191,20 @@ acceptbox calibrate \
 | Reason code | Mode / command | Meaning |
 |---|---|---|
 | `base-not-on-ref` | `accept` (with `--base-ref`) | `--base-ref` was not found in the trusted source or `--base` is not its ancestor |
+| `ref-source-local` | `accept` (with `--strict-refs`) | Trusted ref source degraded to `"local"` while `--strict-refs` was enabled |
 | `no-invariants` | `witnessbox` | `--inv` contained no invariants |
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` missing, `--ebt-sha` not ancestor of `--ebt-ref`, `ebt/` hash ≠ `--approved-tree`, or `ebt/spec.toml` missing |
-| `repro-not-descendant` | `accept` | `base` is not an ancestor of `repro` |
-| `repro-not-ancestor` | `accept` | `repro` is not an ancestor of `head` |
-| `protected-paths-changed` | `accept` | A protected path (including `.acceptbox.toml`, or `ebt`/`tool/ebt_check` in `witnessbox` mode) changed in `base..repro` or `base..head` |
-| `repro-empty` | `accept` (`command`) | `base..repro` diff is empty |
-| `repro-outside-tests` | `accept` (`command`) | `base..repro` modified files outside `--tests` |
-| `repro-tests-modified` | `accept` (`command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |
-| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`witnessbox`) | `base` did not fail for the expected invariant |
-| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` | `repro` passed or failed for the wrong reason |
+| `repro-not-descendant` | `accept` (`bugfix`) | `base` is not an ancestor of `repro` |
+| `repro-not-ancestor` | `accept` (`bugfix`) | `repro` is not an ancestor of `head` |
+| `head-not-descendant` | `accept` (`refactor`) | `base` is not an ancestor of `head` |
+| `protected-paths-changed` | `accept` | A protected path (`.acceptbox.toml`, `protect`, `[command].tests` in `refactor`, or `ebt`/`tool/ebt_check` in `witnessbox`) changed |
+| `repro-empty` | `accept` (`bugfix` + `command`) | `base..repro` diff is empty |
+| `refactor-empty` | `accept` (`refactor`) | `base..head` diff is empty |
+| `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` modified files outside `--tests` |
+| `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` modified, renamed, or deleted files changed in `base..repro` |
+| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`bugfix` + `witnessbox`) | `base` did not fail for the expected invariant |
+| `base-not-green` | `accept` (`refactor`) | `base` did not pass (`green`) |
+| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` (`bugfix`) | `repro` passed or failed for the wrong reason |
 | `head-not-green` | `accept` | `head` did not pass |
 | `mismatch` | `calibrate` | At least one `--green` / `--red` commit did not match its expected status |
 

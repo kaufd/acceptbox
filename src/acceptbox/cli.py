@@ -26,13 +26,15 @@ from .report import (OutDirLock, OutNotEmptyError, atomic_write_json, completed_
                      skipped_run, utc_now_iso)
 from .verdict import (RunOutcome, Verdict, ancestry_verdict, base_not_on_ref, coverage,
                       evaluate_runs, inputs_untrusted, no_invariants,
-                      protected_paths_verdict, repro_tests_verdict, run_verdict)
+                      protected_paths_verdict, ref_source_local, refactor_ancestry_verdict,
+                      refactor_empty_verdict, repro_tests_verdict, run_verdict)
 from .verdict import error as error_verdict
 from .witnessbox import (WITNESSBOX_SUPPORTED_TEXT, check_witnessbox_installation,
                          read_findings_inv, run_commit as run_witnessbox_commit)
 
 DEFAULT_TIMEOUT_SEC = 600.0
 BASE_SKIP_REASON = "в режиме command базовый коммит не прогоняется"
+REFACTOR_REPRO_SKIP_REASON = "в политике refactor репро-коммит не используется"
 NOT_RUN_REASON = "прогон не выполнялся"
 
 
@@ -188,9 +190,18 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 
     # Стадия 1: валидация синтаксиса CLI и немедленный резолв HEAD при опущенном --head (L22).
     try:
+        policy = args.policy
+        strict_refs = bool(args.strict_refs)
         repo = validate_repo_source(args.repo, flag="--repo")
         base = validate_commit_sha(args.base, flag="--base")
-        repro = validate_commit_sha(args.repro, flag="--repro")
+        if policy == "bugfix":
+            if args.repro is None:
+                raise InputError("в политике bugfix обязателен флаг --repro")
+            repro: str | None = validate_commit_sha(args.repro, flag="--repro")
+        else:
+            if args.repro is not None:
+                raise InputError("--repro не используется в политике refactor")
+            repro = None
         # Опущенный --head резолвится после проверки git (стадия 3a), чтобы сбой
         # стал gate-error с accept.json, а не ошибкой CLI.
         head: str | None = (validate_commit_sha(args.head, flag="--head")
@@ -256,14 +267,16 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     actual_tree = spec_sha = None
     ebt_ref_source = ebt_ref_kind = None
     findings_inv: list[str] = []
-    runs = {"base": skipped_run(base, BASE_SKIP_REASON if mode == "command" else NOT_RUN_REASON),
-            "repro": skipped_run(repro, NOT_RUN_REASON),
+    runs = {"base": skipped_run(base, BASE_SKIP_REASON if (mode == "command" and policy == "bugfix") else NOT_RUN_REASON),
+            "repro": skipped_run(repro, REFACTOR_REPRO_SKIP_REASON if policy == "refactor" else NOT_RUN_REASON),
             "head": skipped_run(head, NOT_RUN_REASON)}
     checks = {"base_ref": {"status": "skipped" if base_ref is None else "not-run"},
               "ebt_trust": {"status": "skipped" if mode == "command" else "not-run"},
               "ancestry": {"status": "not-run"},
               "protected_paths": {"status": "not-run"},
-              "repro_tests": {"status": "skipped" if mode == "witnessbox" else "not-run"}}
+              "repro_tests": {"status": "skipped", "reason": "policy=refactor"}
+              if policy == "refactor"
+              else {"status": "skipped" if mode == "witnessbox" else "not-run"}}
 
     def finish(verdict: Verdict, coverage_override: dict | None = None) -> int:
         assert out_path is not None
@@ -274,6 +287,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "env_keys": env_keys,
             "config": config_summary,
             "base_ref": base_ref,
+            "strict_refs": strict_refs,
         }
         if mode == "command":
             inputs_block["command"] = cmd
@@ -293,6 +307,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "finished_at": finished_at,
             "acceptbox_version": __version__,
             "mode": mode,
+            "policy": policy,
             "scope": scope,
             "witnessbox": witnessbox_block,
             "repo": {"source": repo, "base": base, "repro": repro, "head": head,
@@ -348,12 +363,17 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         if not ensure_commit(clone, git_env, repo, base):
                             return finish(error_verdict(
                                 "gate-error", f"коммит {base} отсутствует в --repo"))
-                        # Стадия 5a': --base в доверенной ветке — до чтения конфига из base (L29).
+                        # Стадия 5a': --base в доверенной ветке — до чтения конфига из base (L29, L30).
                         if base_ref is not None:
                             ref_source, ref_kind = trusted_ref_source(repo, git_env)
                             checks["base_ref"] = {
                                 "status": "not-run", "ref": base_ref, "ref_source": ref_source,
                                 "ref_source_kind": ref_kind, "ref_commit": None}
+                            if strict_refs and ref_kind == "local":
+                                checks["base_ref"]["status"] = "failed"
+                                return finish(ref_source_local(
+                                    f"--strict-refs: доверенный источник --base-ref {base_ref!r} "
+                                    f"недоступен (ref_source_kind=local)"))
                             ref_commit = fetch_ref(clone, git_env, ref_source, base_ref)
                             checks["base_ref"]["ref_commit"] = ref_commit
                             checks["base_ref"]["status"] = "failed"
@@ -379,11 +399,15 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                 or "command")
                         scope = "command-only" if mode == "command" else "ebt-only"
                         runs["base"] = skipped_run(
-                            base, BASE_SKIP_REASON if mode == "command" else NOT_RUN_REASON)
+                            base, BASE_SKIP_REASON if (mode == "command" and policy == "bugfix")
+                            else NOT_RUN_REASON)
                         checks["ebt_trust"] = {
                             "status": "skipped" if mode == "command" else "not-run"}
-                        checks["repro_tests"] = {
-                            "status": "skipped" if mode == "witnessbox" else "not-run"}
+                        if policy == "refactor":
+                            checks["repro_tests"] = {"status": "skipped", "reason": "policy=refactor"}
+                        else:
+                            checks["repro_tests"] = {
+                                "status": "skipped" if mode == "witnessbox" else "not-run"}
 
                         timeout = (cli_timeout if cli_timeout is not None
                                    else (project_config.timeout
@@ -400,6 +424,9 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         try:
                             _reject_mode_mixing(args, mode, cmd_argv)
                             if mode == "command":
+                                if strict_refs and base_ref is None:
+                                    raise InputError(
+                                        "--strict-refs в режиме command требует флаг --base-ref")
                                 tests = (cli_tests if cli_tests
                                          else (list(project_config.command_tests)
                                                if project_config and project_config.command_tests
@@ -418,8 +445,11 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                         "(или [command].argv в .acceptbox.toml)")
                             else:
                                 if cli_inv_list is None:
-                                    raise InputError("в режиме witnessbox обязателен флаг --inv")
-                                inv_list = cli_inv_list
+                                    if policy == "bugfix":
+                                        raise InputError("в режиме witnessbox обязателен флаг --inv")
+                                    inv_list = []
+                                else:
+                                    inv_list = cli_inv_list
                                 ebt_repo = (cli_ebt_repo
                                             or (project_config.witnessbox_ebt_repo
                                                 if project_config else None)
@@ -472,25 +502,36 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                                             witnessbox_status.message))
 
                         # Стадия 4: пустой --inv → no-invariants (код 1, прогоны не запускаются).
-                        if mode == "witnessbox" and not inv_list:
+                        # В политике refactor --inv можно опустить (проверка всей спецификации),
+                        # но явно переданный пустой --inv "" всё равно отклоняется (fail-closed).
+                        if mode == "witnessbox" and not inv_list and (
+                                policy == "bugfix" or cli_inv_list is not None):
                             checks["ebt_trust"] = {"status": "skipped", "reason": "no-invariants"}
                             return finish(no_invariants(),
                                           {"checked": [], "skipped": [],
                                            "unchecked": ["no-invariants"]})
 
-                        # Стадия 5b: наличие repro и head, SHA дерева head.
-                        for sha in (repro, head):
+                        # Стадия 5b: наличие repro (в bugfix) и head, SHA дерева head.
+                        required_commits = (repro, head) if policy == "bugfix" else (head,)
+                        for sha in required_commits:
+                            assert sha is not None
                             if not ensure_commit(clone, git_env, repo, sha):
                                 return finish(error_verdict(
                                     "gate-error", f"коммит {sha} отсутствует в --repo"))
                         head_tree = rev_parse_tree(clone, git_env, head)
 
-                        # Стадия 6: доверенные входы EBT (L10) → inputs-untrusted.
+                        # Стадия 6: доверенные входы EBT (L10, L29, L30) → inputs-untrusted / ref-source-local.
                         ebt_dir = None
                         if mode == "witnessbox":
                             ebt_ref_source, ebt_ref_kind = trusted_ref_source(ebt_repo, git_env)
                             ref_info = {"ref_source": ebt_ref_source,
                                         "ref_source_kind": ebt_ref_kind}
+                            if strict_refs and ebt_ref_kind == "local":
+                                msg = (f"--strict-refs: доверенный источник --ebt-ref {ebt_ref!r} "
+                                       f"недоступен (ref_source_kind=local)")
+                                checks["ebt_trust"] = {
+                                    "status": "failed", "reason": msg, **ref_info}
+                                return finish(ref_source_local(msg))
                             try:
                                 ebt_dir, actual_tree, spec_sha = _prepare_ebt(
                                     temp, git_env, ebt_repo, ebt_ref, ebt_sha, approved_tree,
@@ -504,25 +545,37 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                 "spec_sha256": spec_sha, **ref_info}
 
                         # Стадия 7: ancestry → прогоны не запускаются при отказе.
-                        ancestry = {
-                            "base_ancestor_of_repro": is_ancestor(clone, git_env, base, repro),
-                            "repro_ancestor_of_head": is_ancestor(clone, git_env, repro, head),
-                        }
-                        verdict = ancestry_verdict(**ancestry)
+                        if policy == "bugfix":
+                            assert repro is not None
+                            ancestry = {
+                                "base_ancestor_of_repro": is_ancestor(clone, git_env, base, repro),
+                                "repro_ancestor_of_head": is_ancestor(clone, git_env, repro, head),
+                            }
+                            verdict = ancestry_verdict(**ancestry)
+                        else:
+                            ancestry = {
+                                "base_ancestor_of_head": is_ancestor(clone, git_env, base, head),
+                            }
+                            verdict = refactor_ancestry_verdict(**ancestry)
                         checks["ancestry"] = {"status": "ok" if verdict is None else "failed",
                                                **ancestry}
                         if verdict is not None:
                             return finish(verdict)
 
-                        # Стадия 8: защищённые пути на base..repro и base..head.
-                        # .acceptbox.toml защищается автоматически всегда (L23).
-                        protected_specs = _dedupe_preserve_order(
-                            list(protect)
-                            + [CONFIG_FILENAME]
-                            + (["ebt", "tool/ebt_check"] if mode == "witnessbox" else [])
+                        # Стадия 8: защищённые пути.
+                        # .acceptbox.toml защищается всегда (L23); в refactor + command
+                        # дополнительно защищаются --tests (L24/L30).
+                        extra_protected = (
+                            ["ebt", "tool/ebt_check"] if mode == "witnessbox"
+                            else (list(tests) if policy == "refactor" and tests else [])
                         )
-                        changed_base_repro = changed_paths(clone, git_env, base, repro,
-                                                           protected_specs)
+                        protected_specs = _dedupe_preserve_order(
+                            list(protect) + [CONFIG_FILENAME] + extra_protected
+                        )
+                        changed_base_repro = (
+                            changed_paths(clone, git_env, base, repro, protected_specs)
+                            if policy == "bugfix" and repro is not None else []
+                        )
                         changed_base_head = changed_paths(clone, git_env, base, head,
                                                           protected_specs)
                         verdict = protected_paths_verdict(
@@ -537,8 +590,9 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         if verdict is not None:
                             return finish(verdict)
 
-                        # Стадия 9 (только command): репро-тесты.
-                        if mode == "command":
+                        # Стадия 9: репро-тесты (bugfix+command) или непустой дифф (refactor).
+                        if policy == "bugfix" and mode == "command":
+                            assert repro is not None
                             repro_changed = changed_paths(clone, git_env, base, repro)
                             tests_changed = changed_paths(clone, git_env, base, repro, tests)
                             head_changed = changed_paths(clone, git_env, repro, head)
@@ -555,36 +609,50 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             }
                             if verdict is not None:
                                 return finish(verdict)
+                        elif policy == "refactor":
+                            head_changed = changed_paths(clone, git_env, base, head)
+                            verdict = refactor_empty_verdict(head_changed=head_changed)
+                            checks["refactor"] = {
+                                "status": "ok" if verdict is None else "failed",
+                                "changed_base_head": head_changed,
+                            }
+                            if verdict is not None:
+                                return finish(verdict)
 
                         # Стадия 10: последовательные fail-fast прогоны.
                         executed: list[tuple[str, RunOutcome]] = []
-                        order = ("base", "repro", "head") if mode == "witnessbox" \
-                            else ("repro", "head")
+                        if policy == "refactor":
+                            order: tuple[str, ...] = ("base", "head")
+                        else:
+                            order = ("base", "repro", "head") if mode == "witnessbox" \
+                                else ("repro", "head")
                         shas = {"base": base, "repro": repro, "head": head}
                         for name in order:
+                            commit_sha = shas[name]
+                            assert commit_sha is not None
                             worktree = temp / f"worktree-{name}"
-                            add_worktree(clone, git_env, shas[name], worktree)
+                            add_worktree(clone, git_env, commit_sha, worktree)
                             run_dir = out_path / "runs" / name
                             if mode == "command":
-                                outcome = run_command_commit(worktree, shas[name], run_dir,
+                                outcome = run_command_commit(worktree, commit_sha, run_dir,
                                                              env, timeout, cmd_argv=cmd)
                             else:
                                 outcome = run_witnessbox_commit(
-                                    worktree, shas[name], run_dir, env, timeout,
+                                    worktree, commit_sha, run_dir, env, timeout,
                                     ebt_dir=ebt_dir, approved_spec_sha256=spec_sha,
                                     expected_invariants=inv_list, installation_info=wb_info,
                                     witnessbox_bin=wb_bin)
                             runs[name] = completed_run(
-                                shas[name], outcome,
+                                commit_sha, outcome,
                                 log_path=f"runs/{name}/{outcome.log_path}",
                                 artifacts=_relative_artifacts(name, outcome))
                             executed.append((name, outcome))
                             if outcome.status == "red":
                                 findings_inv.extend(read_findings_inv(run_dir))
-                            step = run_verdict(name, outcome)
+                            step = run_verdict(name, outcome, policy=policy)
                             if step is not None:
                                 return finish(step)
-                        return finish(evaluate_runs(executed))
+                        return finish(evaluate_runs(executed, policy=policy))
                 except GitError as git_failure:
                     return finish(error_verdict("gate-error", f"сбой git: {git_failure}"))
                 except EbtPathMissing as missing:
@@ -946,14 +1014,24 @@ def _add_accept_flags(subparser: argparse.ArgumentParser) -> None:
         "--mode", default=None, choices=("command", "witnessbox"),
         help="режим приёмки (по умолчанию из .acceptbox.toml или command)")
     subparser.add_argument(
+        "--policy", default="bugfix", choices=("bugfix", "refactor"),
+        help="политика приёмки: bugfix (base → repro → head, по умолчанию) "
+             "или refactor (base зелёный → head зелёный без --repro, только CLI, L24/L30)")
+    subparser.add_argument(
         "--repo", default=".",
         help="путь или URL проверяемого репозитория (по умолчанию .)")
     subparser.add_argument("--base", required=True, help="полный SHA базового коммита")
-    subparser.add_argument("--repro", required=True, help="полный SHA репро-коммита")
+    subparser.add_argument(
+        "--repro", default=None,
+        help="полный SHA репро-коммита (обязателен в политике bugfix, запрещён в refactor)")
     subparser.add_argument(
         "--base-ref",
         help="ветка, предком которой должен быть --base; берётся из origin локального "
              "--repo (только CLI, L29)")
+    subparser.add_argument(
+        "--strict-refs", action="store_true", default=False,
+        help="запретить слабый локальный запасной путь для --base-ref и --ebt-ref "
+             "(ref_source_kind == local → ref-source-local, только CLI, L30)")
     subparser.add_argument(
         "--head", default=None,
         help="полный SHA головного коммита (по умолчанию HEAD из --repo)")

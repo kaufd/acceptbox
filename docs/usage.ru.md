@@ -74,12 +74,21 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 - `--timeout`: из `.acceptbox.toml` или `600` секунд.
 - `--out`: атомарно создаёт новый пустой каталог в системном `TMPDIR` и печатает путь к `accept.json`. При явном `--out` каталог должен отсутствовать или быть пустым (блокировка `O_EXCL`).
 
-### Источник доверенной ветки (`--base-ref` и `--ebt-ref`)
+### Источник доверенной ветки (`--base-ref`, `--ebt-ref` и `--strict-refs`)
 
 - Если репозиторий (`--repo` для `--base-ref`, `--ebt-repo` для `--ebt-ref`) задан как URL или scp-адрес, ссылка берётся напрямую из него (`ref_source_kind: "remote"`).
 - Если это локальный путь, AcceptBox вызывает `git remote get-url origin` и берёт ссылку из `origin` (`ref_source_kind: "origin"`), чтобы агент не мог сдвинуть локальную ветку и подделать ancestry. Короткие имена разрешаются сначала как `refs/heads/<ref>`, затем как `refs/tags/<ref>`.
-- Если у локального репозитория нет remote `origin`, проверка идёт по самому локальному репозиторию с пометкой `ref_source_kind: "local"` в отчёте (слабая проверка). Любой другой сбой чтения `origin` (например, `safe.directory`) даёт `gate-error`.
-- **Граница доверия:** URL `origin` хранится в `.git/config` локального checkout. Сверяйте `ref_source` и `ref_source_kind` в `accept.json`, а для полной гарантии запускайте приёмку вне досягаемости агента (CI) или передавайте URL в `--repo` / `--ebt-repo`.
+- Если у локального репозитория нет remote `origin`, проверка идёт по самому локальному репозиторию с пометкой `ref_source_kind: "local"` в отчёте (слабая проверка). Передайте `--strict-refs` (только CLI, рекомендуется в CI), чтобы fail-closed отклонять запасной путь `"local"` с кодом `ref-source-local` (код `1`). В режиме `command` `--strict-refs` требует `--base-ref`. Любой другой сбой чтения `origin` (например, `safe.directory`) даёт `gate-error`.
+- **Граница доверия:** URL `origin` хранится в `.git/config` локального checkout. Сверяйте `ref_source` и `ref_source_kind` в `accept.json`, а для полной гарантии запускайте приёмку вне досягаемости агента (CI, см. [docs/ci.ru.md](ci.ru.md)) или передавайте URL в `--repo` / `--ebt-repo`.
+
+### Политики приёмки (`--policy bugfix` и `--policy refactor`)
+
+- **`--policy bugfix` (по умолчанию, только CLI):** требует `--repro` и проверяет цепочку `base → repro → head` (`repro` красный, `head` зелёный; в `witnessbox` также `base` красный по `--inv`).
+- **`--policy refactor` (только CLI, L24/L30):** запрещает `--repro`, работает в обоих режимах (`command` и `witnessbox`), проверяет ancestry `base → head` (`head-not-descendant`) и непустоту `base..head` (`refactor-empty`), автоматически защищает `.acceptbox.toml` плюс `[command].tests` (в `command`) или `ebt`/`tool/ebt_check` (в `witnessbox`) в `base..head` и требует, чтобы **оба** коммита `base` (`base-not-green`) и `head` (`head-not-green`) прошли (`green`). В `witnessbox` + `refactor` флаг `--inv` опционален (без него проверяется вся спецификация).
+
+```sh
+acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git merge-base main HEAD)"
+```
 
 ### Режим `command`
 
@@ -182,16 +191,20 @@ acceptbox calibrate \
 | Код причины | Режим / команда | Значение |
 |---|---|---|
 | `base-not-on-ref` | `accept` (с `--base-ref`) | `--base-ref` не найдена в доверенном источнике или `--base` не является её предком |
+| `ref-source-local` | `accept` (с `--strict-refs`) | Источник доверенной ветки деградировал до `"local"` при включённом `--strict-refs` |
 | `no-invariants` | `witnessbox` | `--inv` не содержит ни одного инварианта |
 | `inputs-untrusted` | `witnessbox` | `--ebt-ref` не найдена, `--ebt-sha` не предок `--ebt-ref`, хеш `ebt/` ≠ `--approved-tree` или нет `ebt/spec.toml` |
-| `repro-not-descendant` | `accept` | `base` не является предком `repro` |
-| `repro-not-ancestor` | `accept` | `repro` не является предком `head` |
-| `protected-paths-changed` | `accept` | Защищённый путь (включая `.acceptbox.toml`, а в `witnessbox` также `ebt` и `tool/ebt_check`) изменён в `base..repro` или `base..head` |
-| `repro-empty` | `accept` (`command`) | Дифф `base..repro` пуст |
-| `repro-outside-tests` | `accept` (`command`) | `base..repro` меняет пути вне `--tests` |
-| `repro-tests-modified` | `accept` (`command`) | `repro..head` изменяет, переименовывает или удаляет файлы из `base..repro` |
-| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`witnessbox`) | `base` не упал по ожидаемому инварианту |
-| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` | `repro` зелёный или упал не по нужной причине |
+| `repro-not-descendant` | `accept` (`bugfix`) | `base` не является предком `repro` |
+| `repro-not-ancestor` | `accept` (`bugfix`) | `repro` не является предком `head` |
+| `head-not-descendant` | `accept` (`refactor`) | `base` не является предком `head` |
+| `protected-paths-changed` | `accept` | Защищённый путь (`.acceptbox.toml`, `protect`, `[command].tests` в `refactor` или `ebt`/`tool/ebt_check` в `witnessbox`) изменён |
+| `repro-empty` | `accept` (`bugfix` + `command`) | Дифф `base..repro` пуст |
+| `refactor-empty` | `accept` (`refactor`) | Дифф `base..head` пуст |
+| `repro-outside-tests` | `accept` (`bugfix` + `command`) | `base..repro` меняет пути вне `--tests` |
+| `repro-tests-modified` | `accept` (`bugfix` + `command`) | `repro..head` изменяет, переименовывает или удаляет файлы из `base..repro` |
+| `base-green` / `base-report-invalid` / `base-red-wrong-reason` | `accept` (`bugfix` + `witnessbox`) | `base` не упал по ожидаемому инварианту |
+| `base-not-green` | `accept` (`refactor`) | `base` не зелёный |
+| `repro-green` / `repro-report-invalid` / `repro-red-wrong-reason` | `accept` (`bugfix`) | `repro` зелёный или упал не по нужной причине |
 | `head-not-green` | `accept` | `head` не зелёный |
 | `mismatch` | `calibrate` | Хотя бы один коммит `--green` / `--red` дал неожиданный исход |
 
