@@ -1,107 +1,109 @@
-# Журнал решений AcceptBox
+# AcceptBox Decision Log
 
-Append-only: при изменении добавляется запись с датой, причиной и статусом; прежние не переписываются.
-Решения `L8`–`L14`, `L17`–`L21` перенесены из исходного журнала проекта `qa` (`docs/product/sources/decisions.md`).
-Внешние ссылки в записях ниже: `L1`–`L7`, `L15`–`L16` находятся в исходном журнале `qa/docs/product/sources/decisions.md`; `D4`, `D63`, `D65`–`D69` — в журнале решений [WitnessBox](https://github.com/kaufd/witnessbox).
+**English** · [Русский](decisions.ru.md)
 
-## L8 — Приёмка выпускается отдельным продуктом `acceptbox`
-2026-11-12. Принято владельцем. Имя продукта и команды — `acceptbox`, каталог `src/acceptbox/`, собственная поставка, версия CLI и формат отчёта `accept.json` (формат 1). Причина: Ц1/З12 были заявлены, но не имели ни шага, ни критерия; `scripts/accept.py` продуктом не является. Следствие: этап 3 переписан, критерии 5.1/5.5 изменены (удаляется ядро, а не любая упаковка).
+Append-only: when something changes, add a new entry with a date, reason, and status; earlier entries are never rewritten.
+Decisions `L8`–`L14` and `L17`–`L21` were migrated from the original `qa` project decision log (`docs/product/sources/decisions.md`).
+External references below: `L1`–`L7` and `L15`–`L16` live in the original `qa/docs/product/sources/decisions.md`; `D4`, `D63`, `D65`–`D69` live in the [WitnessBox](https://github.com/kaufd/witnessbox) decision log.
 
-## L9 — Правило вердикта: красная база обязательна
-2026-11-12. Принято владельцем (дефолт). Принято, если одновременно: доверенные входы подтверждены; ancestry `base → repro → head`; база красная по нужной причине и по одному из `--inv`; репро красный по нужной причине; head зелёный. Причина: прежняя пара «репро красный + head зелёный + ancestry» пропускает сфабрикованный баг (сломал в репро — починил в head). «Красный по нужной причине» определяется по `findings[].kind` в `report.json`, а не только по `checker_failed`; список категорий фиксируется по живой установке (шаг 1.3). Заменяет критерий 6.2 прежней редакции.
+## L8 — Acceptance ships as a standalone product `acceptbox`
+2026-11-12. Accepted by owner. Product and command name: `acceptbox`, package directory `src/acceptbox/`, standalone distribution, CLI version, and `accept.json` report format (format 1). Reason: goals Ц1/З12 were declared without a step or acceptance criterion; `scripts/accept.py` is not a product. Consequence: stage 3 rewritten, criteria 5.1/5.5 updated (removing the core, not arbitrary packaging).
 
-## L10 — Утверждение `ebt/`: коммит владельца в основной ветке продукта
-2026-11-12. Принято владельцем (дефолт). Отдельного файла утверждений не вводим. QA берёт `ebt/` из чистого checkout закреплённого SHA основной ветки, проверяет, что SHA — предок основной ветки, и сверяет хеш дерева `ebt/` с утверждённым значением, переданным на вход. Значение выдаёт `acceptbox pin` и записывается владельцем при утверждении (PR/план задачи).
+## L9 — Verdict rule: failing `base` is mandatory
+2026-11-12. Accepted by owner (default). Accepted only if simultaneously: trusted inputs are verified; ancestry `base → repro → head` holds; `base` is red for the right reason on at least one `--inv`; `repro` is red for the right reason; `head` is green. Reason: the earlier pair ("repro red + head green + ancestry") passes a fabricated bug (break in `repro`, fix in `head`). "Red for the right reason" is determined from `findings[].kind` in `report.json`, not only `checker_failed`; the category list is pinned against a live installation (step 1.3). Replaces criterion 6.2 of the earlier revision.
 
-## L11 — Область v1: только EBT с явным непокрытым
-2026-11-12. Принято владельцем (дефолт). Отчёт содержит проверенные инварианты, пропущенные проверки и непроверенные требования. Ревью и UI-проверки имеют отдельный статус и на вердикт v1 не влияют. Задача без инвариантов даёт явный `no-invariants`, а не молчание. Объединение областей — отдельное решение.
+## L10 — Approving `ebt/`: owner's commit on the product's main branch
+2026-11-12. Accepted by owner (default). No separate approval file is introduced. QA checks out `ebt/` from a clean checkout of the pinned SHA on the main branch, verifies that the SHA is an ancestor of the main branch, and compares the `ebt/` tree hash against the approved value passed as input. The value is produced by `acceptbox pin` and recorded by the owner upon approval (PR/task plan).
 
-## L12 — Поддерживаемый WitnessBox: `>=0.9.0,<0.10`
-2026-11-12. Принято владельцем (дефолт). Отсутствие команды или версия вне диапазона — код 2 с подсказкой, не «отклонено». (Обновлено решением L21.)
+## L11 — v1 scope: EBT only, with explicit uncovered reporting
+2026-11-12. Accepted by owner (default). The report records checked invariants, skipped checks, and unchecked requirements. Reviews and UI checks have separate status and do not affect the v1 verdict. A task without invariants produces an explicit `no-invariants` rejection rather than silence. Merging scopes is a separate decision.
 
-## L13 — Доставка после приёмки
-2026-11-12. Принято владельцем (дефолт). Приёмка выполняется до squash; исходные коммиты сохраняются. Если доставка меняет проверенное дерево — повторная приёмка обязательна. Отчёт связывает проверенные SHA с доставленным коммитом.
+## L12 — Supported WitnessBox: `>=0.9.0,<0.10`
+2026-11-12. Accepted by owner (default). A missing command or out-of-range version returns exit code 2 with a hint, not "rejected". (Updated by decision L21.)
 
-## L14 — Упаковка: сборочная зависимость, runtime на стандартной библиотеке
-2026-11-12. Принято владельцем (дефолт). `pyproject.toml` с hatchling используется только при сборке; runtime `acceptbox` сторонних зависимостей не имеет. Правило «никаких новых runtime-зависимостей» не нарушается.
+## L13 — Delivery after acceptance
+2026-11-12. Accepted by owner (default). Acceptance runs before squashing; original commits are preserved. If delivery modifies the verified tree, re-acceptance is mandatory. The report links verified SHAs to the delivered commit.
 
-## L17 — Изоляция прогона и окружение гейта
-2026-11-12. Принято владельцем (дефолт). QA работает во временном клоне с отдельными detached-worktree на base/repro/head; клон пользователя не переключается. Окружение гейта строит QA (`BASE`, `EBT_INV` + минимальный allowlist); наследуемые `EBT_*`, включая `EBT_CHECK` и `EBT_TESTS`, отбрасываются. `--out` должен быть пуст; `accept.json` пишется атомарно в конце; прерванный прогон не оставляет «принято».
+## L14 — Packaging: build dependency only, stdlib-only runtime
+2026-11-12. Accepted by owner (default). `pyproject.toml` with `hatchling` is used only at build time; the `acceptbox` runtime has no third-party dependencies. The "no new runtime dependencies" rule is upheld.
 
-## L18 — Калибровка чувствительности отделена от приёмки
-2026-11-12. Принято владельцем (дефолт). Мутант `893bc0b5` — потомок принятого `58e99b2d`; такая пара даёт `repro-not-ancestor`. Калибровка выполняется отдельным режимом `acceptbox calibrate` и вердикта приёмки не выдаёт. Проверка последовательности идёт на реальной паре base/repro/head. Шаг 3.4 прежней редакции исправлен.
+## L17 — Run isolation and gate environment
+2026-11-12. Accepted by owner (default). QA operates in a temporary clone with separate detached worktrees for `base`/`repro`/`head`; the user's clone is never switched. QA constructs the gate environment (`BASE`, `EBT_INV`, plus a minimal allowlist); inherited `EBT_*`, including `EBT_CHECK` and `EBT_TESTS`, are stripped. `--out` must be empty; `accept.json` is written atomically at the end; an interrupted run never leaves an "accepted" result.
 
-## L19 — Правило вердикта режима `command` (без `witnessbox`) и контракт `acceptbox accept` 0.1.0
-2026-11-20. Предложено в плане standalone v0.1.0 (требует подтверждения владельца). Правило L9 (красная `base` с проверкой `findings[].kind` по `--inv`) применяется только в `--mode witnessbox`. В `--mode command` новый репро-тест добавляется в `repro` (на `base` его нет), поэтому действуют правила ядра:
-- `--mode <command|witnessbox>` и `--head <sha>` (полный SHA Git) обязательны в `0.1.0` без значений по умолчанию;
-- в `--mode command` обязателен `--tests <pathspec>` (повторяемый); команда передаётся как `argv` после `--` без `shell=True`; таймаут задаётся `--timeout` (по умолчанию `600` с); подготовка зависимостей в чистом worktree — ответственность переданной команды/скрипта (при сбое подготовки должна возвращать код `>= 2`);
-- до прогонов проверяются ancestry `base → repro → head` (`repro-not-descendant`, `repro-not-ancestor`), `--protect` для `base..repro` и `base..head` (`protected-paths-changed`), непустота `base..repro` (`repro-empty`), принадлежность всех путей `base..repro` к `--tests` (`repro-outside-tests`) и неизменность этих путей в `repro..head` с `--no-renames` (`repro-tests-modified`);
-- `base` не прогоняется; прогоняются `repro` (код `1` → `red`) и `head` (код `0` → `green`); коды `>= 2`, сигналы, `OSError` и таймаут → `error` (`gate-error`, код `2`).
-Граница гарантий: `command` ограничивает пути правок в `repro` и запрещает `head` менять или удалять репро-тесты, но смысловую корректность теста проверяет человек на ревью; независимую перепроверку инвариантов даёт режим `witnessbox`.
+## L18 — Sensitivity calibration separated from acceptance
+2026-11-12. Accepted by owner (default). Mutant `893bc0b5` is a descendant of accepted `58e99b2d`; such a pair triggers `repro-not-ancestor`. Calibration runs via a separate `acceptbox calibrate` subcommand and never issues an acceptance verdict. Sequence checks run on a real `base`/`repro`/`head` triple. Step 3.4 of the earlier revision is corrected.
 
-## L20 — Выделение `acceptbox` без этапов 1–2 и опциональный `witnessbox` в `--installation`
-2026-11-20. Предложено в плане standalone v0.1.0 (требует подтверждения владельца). Дополняет L8, L12, L16:
-- Выделение `acceptbox` в отдельный репозиторий выполняется чистым стартом на базе `packaging/acceptbox/` (`packaging/` в `qa` не отслеживается) и не привязано к этапам 1–2 плана `2026-11-12-acceptbox-product.md`.
-- `witnessbox` (`>=0.10.0`, L21) опционален и нужен только в `--mode witnessbox`.
-- Меняется контракт `acceptbox --installation`: код выхода `0`, если доступны `git` и `acceptbox`, независимо от статуса `witnessbox`; код `2` — только при отсутствии/сбое `git` или ошибке диагностики `acceptbox`. JSON включает `format: 1`, `report_format: 1`, блок `git` (`ok | missing | error`) и блок `witnessbox` (`compatible | missing | incompatible | error`). Флаг `--require-witnessbox` не вводится; `packaging/agentflowbox/{cli.cjs,package.json,README.md}` обновляются под `0.1.0` и опциональный `witnessbox`.
+## L19 — Verdict rule for `command` mode (without `witnessbox`) and `acceptbox accept` 0.1.0 contract
+2026-11-20. Proposed in the standalone v0.1.0 plan (requires owner confirmation). Rule L9 (failing `base` checked via `findings[].kind` on `--inv`) applies only in `--mode witnessbox`. In `--mode command`, the new reproduction test is added in `repro` (it does not exist on `base`), so core rules apply:
+- `--mode <command|witnessbox>` and `--head <sha>` (full Git SHA) are required in `0.1.0` with no defaults;
+- in `--mode command`, `--tests <pathspec>` (repeatable) is required; the command is passed as `argv` after `--` without `shell=True`; timeout is set via `--timeout` (default `600` s); preparing dependencies in a clean worktree is the responsibility of the passed command/script (on setup failure it must return exit code `>= 2`);
+- before runs, check ancestry `base → repro → head` (`repro-not-descendant`, `repro-not-ancestor`), `--protect` across `base..repro` and `base..head` (`protected-paths-changed`), non-empty `base..repro` (`repro-empty`), all `base..repro` paths inside `--tests` (`repro-outside-tests`), and immutability of those paths in `repro..head` with `--no-renames` (`repro-tests-modified`);
+- `base` is not executed; `repro` (exit `1` → `red`) and `head` (exit `0` → `green`) are executed; exit codes `>= 2`, signals, `OSError`, and timeouts → `error` (`gate-error`, exit code `2`).
+Guarantee boundary: `command` restricts which paths `repro` may touch and prevents `head` from modifying or deleting reproduction tests, while semantic correctness of the test is verified by a human during review; independent invariant verification is provided by `witnessbox` mode.
 
-## L21 — Поддерживаемый WitnessBox обновлён до `>=0.10.0` (без верхней границы) и контроль изменений API
-2026-11-20. Подтверждено владельцем (обновляет L12 и L20 в части версии и канонического slug). На PyPI и GitHub (канонический slug `kaufd/witnessbox`, D63) актуальный выпуск WitnessBox — `0.10.0` (`v0.10.0`, 2026-11-16, D65–D69). Минимальная поддерживаемая версия для `acceptbox 0.1.0` фиксируется как `>=0.10.0` без верхней границы (проверка `(major, minor, patch) >= (0, 10, 0)` в `cli.py` и `witnessbox.py`, без поддержки `0.9.x`). Поскольку без верхней границы будущие версии `witnessbox` могут изменить CLI или JSON-контракты, вводятся два контура защиты и отслеживания:
-- **Fail-closed валидация схемы в runtime:** строгая проверка обязательных ключей и типов в `witnessbox --installation`, `gate.json` (включая `format == 1`) и `report.json`; при изменении `format` или структуры `acceptbox` завершается явным `gate-error` (`error`, код `2`) или `invalid-report`, не допуская ложного `ACCEPTED` и необработанных исключений.
-- **Периодический CI-мониторинг:** еженедельный запуск в CI (`schedule` + `workflow_dispatch`) ставит последний релиз `witnessbox` с PyPI и прогоняет контрактный smoke/e2e-тест `--mode witnessbox`, выявляя поломку API сразу после выхода нового релиза.
-Пересмотреть, если: в новой версии `witnessbox` сломается обратная совместимость `gate.json` формата `1`, `report.json` или `--installation` — тогда обновить адаптер и/или зафиксировать верхнюю границу.
+## L20 — Extracting `acceptbox` without stages 1–2 and optional `witnessbox` in `--installation`
+2026-11-20. Proposed in the standalone v0.1.0 plan (requires owner confirmation). Supplements L8, L12, L16:
+- Extracting `acceptbox` into a separate repository is done as a clean start based on `packaging/acceptbox/` (`packaging/` is untracked in `qa`) and is decoupled from stages 1–2 of `2026-11-12-acceptbox-product.md`.
+- `witnessbox` (`>=0.10.0`, L21) is optional and needed only in `--mode witnessbox`.
+- `acceptbox --installation` contract changes: exit code `0` whenever `git` and `acceptbox` are available regardless of `witnessbox` status; exit code `2` only if `git` is missing/broken or `acceptbox` diagnostics fail. JSON includes `format: 1`, `report_format: 1`, `git` (`ok | missing | error`), and `witnessbox` (`compatible | missing | incompatible | error`). No `--require-witnessbox` flag is added; `packaging/agentflowbox/{cli.cjs,package.json,README.md}` are updated for `0.1.0` and optional `witnessbox`.
 
-## L22 — Эргономичные дефолты CLI `acceptbox` (дополняет L19, L20)
-2026-11-21. Принято владельцем (запланировано к реализации до выпуска `v0.1.0`). Чтобы сократить ручной ввод без ослабления fail-closed гарантий:
-- `--mode` становится опциональным со значением по умолчанию `command` (`--mode witnessbox` указывается явно; проверки смешивания флагов режимов сохраняются, ложного `ACCEPTED` не допускается);
-- `--repo` становится опциональным со значением по умолчанию `.`;
-- `--head` становится опциональным со значением по умолчанию `HEAD` из `--repo` с немедленным резолвом в полный SHA коммита в момент старта (явно переданный `--head` по-прежнему принимается только как полный SHA);
-- `--ebt-repo` в `accept` и `calibrate` для `--mode witnessbox` становится опциональным со значением по умолчанию `--repo` (по L5 каталог `ebt/` живёт в репозитории продукта; внешний путь остаётся опцией; в `acceptbox pin` флаг `--ebt-repo` остаётся обязательным);
-- `--out` становится опциональным: при отсутствии атомарно создаётся новый пустой каталог в системном `TMPDIR` (не загрязняет рабочее дерево репозитория и сохраняет гарантию L17), а путь к `accept.json`/`calibrate.json` выводится в итоговое сообщение; при явном `--out` сохраняется строгая проверка `out-not-empty` + `O_EXCL`.
-- Автоопределение тестовой команды после `--` не вводится (нарушает fail-closed; повторяемые параметры выносятся в проектный конфиг по L23).
+## L21 — Supported WitnessBox updated to `>=0.10.0` (no upper bound) and API drift monitoring
+2026-11-20. Confirmed by owner (updates L12 and L20 regarding version and canonical slug). On PyPI and GitHub (canonical slug `kaufd/witnessbox`, D63), the current WitnessBox release is `0.10.0` (`v0.10.0`, 2026-11-16, D65–D69). The minimum supported version for `acceptbox 0.1.0` is set to `>=0.10.0` without an upper bound (`(major, minor, patch) >= (0, 10, 0)` in `cli.py` and `witnessbox.py`, dropping `0.9.x`). Because future `witnessbox` versions without an upper bound may change CLI or JSON contracts, two protection and monitoring layers are introduced:
+- **Fail-closed runtime schema validation:** strict validation of required keys and types in `witnessbox --installation`, `gate.json` (including `format == 1`), and `report.json`; on format or structure changes, `acceptbox` terminates with an explicit `gate-error` (`error`, exit code `2`) or `invalid-report`, preventing false `ACCEPTED` results and unhandled exceptions.
+- **Periodic CI monitoring:** a weekly CI job (`schedule` + `workflow_dispatch`) installs the latest `witnessbox` release from PyPI and runs the `--mode witnessbox` contract smoke/e2e test, detecting API breakage immediately after a new release.
+Revisit if: a new `witnessbox` version breaks backwards compatibility of format-`1` `gate.json`, `report.json`, or `--installation` — then update the adapter and/or pin an upper bound.
 
-## L23 — Проектный конфиг AcceptBox (`.acceptbox.toml`)
-2026-11-21. Принято владельцем (требует проектирования схемы перед реализацией). Для устранения ручного повторения параметров проекта (`--tests`, `--protect`, команды запуска тестов после `--`, параметров режима) вводится проектный конфиг (кандидат: `.acceptbox.toml`).
-Обязательное правило доверия (fail-closed):
-- конфиг читается строго из базового/утверждённого коммита (`base`, а не из проверяемой ветки `repro`/`head` или рабочего дерева);
-- файл конфига автоматически защищается от изменений в `base..repro` и `base..head` (как `--protect`), чтобы агент не мог подменить тестовую команду, ослабить `--tests` или снять защиту путей.
+## L22 — Ergonomic `acceptbox` CLI defaults (supplements L19, L20)
+2026-11-21. Accepted by owner (planned for implementation before releasing `v0.1.0`). To reduce manual typing without weakening fail-closed guarantees:
+- `--mode` becomes optional with default `command` (`--mode witnessbox` is specified explicitly; cross-mode flag checks remain, no false `ACCEPTED` is possible);
+- `--repo` becomes optional with default `.`;
+- `--head` becomes optional with default `HEAD` from `--repo`, resolved immediately to a full commit SHA on startup (explicitly passed `--head` is still accepted only as a full SHA);
+- `--ebt-repo` in `accept` and `calibrate` for `--mode witnessbox` becomes optional with default `--repo` (per L5, `ebt/` lives in the product repository; an external path remains optional; in `acceptbox pin`, `--ebt-repo` stays required);
+- `--out` becomes optional: when omitted, a new empty directory is atomically created in system `TMPDIR` (avoiding working-tree pollution and preserving L17), and the path to `accept.json`/`calibrate.json` is printed in the summary; explicit `--out` retains strict `out-not-empty` + `O_EXCL` enforcement;
+- autodetection of the test command after `--` is not introduced (violates fail-closed; repeatable settings move to the project config per L23).
 
-## L24 — Область применимости TDD (`base → repro → head`): только баги (уточняет L19)
-2026-11-21. Принято владельцем. Цепочка `base → repro → head` с красным репро-коммитом предназначена для **багфиксов** (а также для инвариантов, утверждённых человеком до реализации в `--mode witnessbox`). Для **фич** красный репро-тест, написанный той же моделью, не даёт полезной гарантии, так как модель может подогнать тест и реализацию друг под друга — приёмка фич строится на утверждённой человеком спецификации (D4/L10) и/или независимом ревью и проверке поведения. Политика для **рефакторингов** (`base` зелёный → `head` зелёный с защитой путей и тестов без `repro`) ортогональна `--mode` и остаётся отдельной задачей.
+## L23 — Project configuration (`.acceptbox.toml`)
+2026-11-21. Accepted by owner (schema design required before implementation). To avoid repeating project parameters (`--tests`, `--protect`, the test command after `--`, mode settings), introduce a project config (candidate: `.acceptbox.toml`).
+Mandatory trust rule (fail-closed):
+- the config is read strictly from the base/approved commit (`base`, never from the checked branch `repro`/`head` or the working tree);
+- the config file is automatically protected against edits in `base..repro` and `base..head` (like `--protect`), preventing an agent from swapping the test command, weakening `--tests`, or removing protected paths.
 
-## L25 — Схема проектного конфига `.acceptbox.toml` (уточняет L23)
-2026-11-21. Принято владельцем и реализовано вместе с L22–L24. Утверждена секционная схема `.acceptbox.toml` формата `1` (`tomllib` из стандартной библиотеки Python >=3.11):
-- верхний уровень: `format = 1` (обязательный целый ключ), опционально `mode` (`"command"` | `"witnessbox"`), `timeout` (конечное положительное число), `protect` (список pathspec), `env` (список `KEY` / `KEY=VAL`, с запретом `BASE`, `EBT_*`, переменных git-изоляции);
-- `[command]`: опционально `tests` (непустой список pathspec) и `argv` (непустой список строк без shell);
-- `[witnessbox]`: опционально `ebt_repo` и `ebt_ref`.
-Секционная схема позволяет хранить настройки обоих режимов в одном проекте без конфликта смешивания. Все присутствующие секции валидируются fail-closed: неизвестные ключи, пер-задачные поля (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`), симлинки/каталоги вместо обычного файла и ошибки TOML дают `ERROR` (`config-invalid`, код `2`).
-Правила приоритета и доверия:
-- файл читается строго из объектов Git коммита `base` (в `calibrate` — только если передан `--base`), никогда из рабочего дерева или `repro`/`head`;
-- `.acceptbox.toml` автоматически включается в защищённые пути `base..repro` и `base..head`;
-- `protect` суммируется (объединение конфига и `--protect`), `env` сливается с приоритетом CLI по ключу; `mode`, `timeout`, `tests`, `argv`, `ebt_repo`, `ebt_ref` переопределяются явными флагами CLI;
-- в `accept.json`/`calibrate.json` блок `inputs.config` фиксирует `path`, `commit` (`base`) и `sha256` прочитанного конфига (или `null`).
+## L24 — TDD (`base → repro → head`) applicability scope: bugfixes only (clarifies L19)
+2026-11-21. Accepted by owner. The `base → repro → head` chain with a failing reproduction commit is intended for **bugfixes** (as well as invariants approved by a human prior to implementation in `--mode witnessbox`). For **features**, a failing repro test written by the same model does not provide a useful guarantee because the model can fit test and implementation to each other — feature acceptance rests on a human-approved specification (D4/L10) and/or independent review and behavioural verification. A policy for **refactorings** (`base` green → `head` green with protected paths and tests without `repro`) is orthogonal to `--mode` and remains a separate task.
 
-## L26 — Подтверждение L19–L20, граница доверия `--base`, порядок стадий и запись отчёта при ошибках CLI после чтения конфига
-2026-11-21. Принято владельцем (дополняет L19, L20, L22, L23, L25).
-- Решения **L19** и **L20** подтверждены владельцем (реализация влита в `main`, PR #1). Пункт L19 об обязательных `--mode` и `--head` без значений по умолчанию заменён решением **L22**.
-- **Граница доверия `--base` (для `.acceptbox.toml` и режима `command`):** `acceptbox` не проверяет принадлежность `--base` основной ветке; гарантия неизменности `.acceptbox.toml` в `base..repro` и `base..head` действует при условии, что `--base` задаёт принимающая сторона (человек, CI или внешний оркестратор, например через `git merge-base main HEAD`), а не проверяемый агент. Опциональный флаг `--base-ref` для автоматической проверки ancestry по образцу L10 отложен за рамки `0.1.0`.
-- **Порядок стадий с `.acceptbox.toml`:** временный клон `--repo`, получение коммита `base` и чтение `base:.acceptbox.toml` выполняются до `witnessbox --installation` и проверки пустого `--inv`, так как `mode` и `env` могут приходить из проектного конфига.
-- **Правило записи отчёта при коде `2`:** если после чтения `base:.acceptbox.toml` и слияния с флагами CLI не хватает обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или обнаружено смешивание флагов режимов, это классифицируется как ошибка входов CLI: возвращается код `2` в `stderr` **без** записи `accept.json`/`calibrate.json`, а пустой каталог `--out` удаляется, если он был создан текущим запуском. При невалидном `.acceptbox.toml` в `base` (`config-invalid`) отчёт с `result: "ERROR"` и кодом `2` записывается штатно.
+## L25 — `.acceptbox.toml` schema (clarifies L23)
+2026-11-21. Accepted by owner and implemented alongside L22–L24. Approved format-`1` sectioned schema for `.acceptbox.toml` (using stdlib `tomllib`, Python `>=3.11`):
+- top level: `format = 1` (required integer), optional `mode` (`"command"` | `"witnessbox"`), `timeout` (finite positive number), `protect` (list of pathspecs), `env` (list of `KEY` / `KEY=VAL`, forbidding `BASE`, `EBT_*`, and git isolation variables);
+- `[command]`: optional `tests` (non-empty list of pathspecs) and `argv` (non-empty list of strings, no shell);
+- `[witnessbox]`: optional `ebt_repo` and `ebt_ref`.
+The sectioned layout allows storing both modes' settings in one project without flag-mixing conflicts. Every present section is validated fail-closed: unknown keys, per-task fields (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`), symlinks/directories instead of regular files, and TOML errors return `ERROR` (`config-invalid`, exit code `2`).
+Precedence and trust rules:
+- read strictly from Git objects of commit `base` (in `calibrate`, only when `--base` is passed), never from the working tree or `repro`/`head`;
+- `.acceptbox.toml` is automatically included in protected paths for `base..repro` and `base..head`;
+- `protect` is unioned (config + `--protect`), `env` merges with CLI precedence by key; `mode`, `timeout`, `tests`, `argv`, `ebt_repo`, and `ebt_ref` are overridden by explicit CLI flags;
+- `inputs.config` in `accept.json`/`calibrate.json` records `path`, `commit` (`base`), and `sha256` of the loaded config (or `null`).
 
-## L27 — Исправления по ревью кода L22–L26 (уточняет L22, L25, L26)
-2026-11-22. Предложено по итогам ревью кода (требует подтверждения владельца). Изменения поведения:
-- `[witnessbox].ebt_repo` в `.acceptbox.toml` принимается только как URL или абсолютный путь: относительный путь зависел бы от каталога запуска, а не от `--repo` (`config-invalid`). В отчёте `config-invalid` блок `inputs.config` содержит `commit` и `sha256` отклонённого файла.
-- Опущенный `--head` резолвится сразу после проверки `git`; сбой резолва — `gate-error` с `accept.json`, а не ошибка CLI. Ведущая `~` в `--repo`/`--ebt-repo`/`ebt_repo` раскрывается один раз при валидации.
-- Ошибки окружения (`OSError`) после захвата `--out` записываются в отчёт как `gate-error`; ошибка очистки временного каталога не меняет уже записанный вердикт и код выхода.
-- Прогоны `command` и `witnessbox gate` идут в отдельной сессии; по таймауту и после завершения прогона убивается вся группа процессов.
-- Короткое имя `--ebt-ref` разрешается явно: сначала `refs/heads/<ref>`, затем `refs/tags/<ref>` (одноимённый тег не подменяет ветку).
-- `--env KEY` без значения при отсутствии `KEY` в окружении снимает значение `KEY` из конфига (приоритет CLI по ключу).
-- `calibrate` больше не принимает `--tests`: ни одна проверка калибровки его не использовала.
-- Находки `report.json` с нестроковыми `kind`/`inv` не засчитываются как целевые (раньше — необработанное исключение с кодом `1` без отчёта).
-Ограничение без изменения кода: при `--ebt-repo`, равном локальному checkout (дефолт L22), проверка предка `--ebt-ref` идёт по локальной ветке; опорой доверия остаётся `--approved-tree`. Пересмотреть, если: потребуется запрет локального `--ebt-repo` по умолчанию или проверка ref по удалённому репозиторию.
+## L26 — Confirmation of L19–L20, `--base` trust boundary, stage ordering, and report writing on CLI errors after config load
+2026-11-21. Accepted by owner (supplements L19, L20, L22, L23, L25).
+- Decisions **L19** and **L20** are confirmed by owner (implementation merged to `main`, PR #1). The L19 requirement for mandatory `--mode` and `--head` without defaults is superseded by **L22**.
+- **`--base` trust boundary (for `.acceptbox.toml` and `command` mode):** `acceptbox` does not verify that `--base` belongs to the main branch; the immutability guarantee of `.acceptbox.toml` across `base..repro` and `base..head` holds provided `--base` is supplied by the acceptor (human, CI, or external orchestrator, e.g. via `git merge-base main HEAD`) rather than the agent under test. An optional `--base-ref` flag for automatic ancestry checking modeled on L10 is deferred past `0.1.0`.
+- **Stage ordering with `.acceptbox.toml`:** temporary clone of `--repo`, fetching `base`, and reading `base:.acceptbox.toml` run before `witnessbox --installation` and the empty `--inv` check, since `mode` and `env` may come from the project config.
+- **Report-writing rule on exit code `2`:** if required arguments (`--tests`, command after `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) are missing or mode flags are mixed after loading `base:.acceptbox.toml` and merging CLI flags, this is classified as a CLI input error: exit code `2` is returned to `stderr` **without** writing `accept.json`/`calibrate.json`, and an empty `--out` directory created by the current run is removed. On an invalid `.acceptbox.toml` in `base` (`config-invalid`), a report with `result: "ERROR"` and exit code `2` is written normally.
 
-## L28 — Подтверждение L27
-2026-11-22. Принято владельцем. Решение **L27** подтверждено в редакции от 2026-11-22 без изменений: `[witnessbox].ebt_repo` в `.acceptbox.toml` — только URL или абсолютный путь; `calibrate` не принимает `--tests`; при локальном `--ebt-repo` (дефолт L22) слабая проверка предка `--ebt-ref` остаётся задокументированным ограничением, опорой доверия служит `--approved-tree`. Остальные пункты L27 (резолв `--head` после проверки `git`, запись `OSError` в отчёт, убийство группы процессов, порядок разрешения `--ebt-ref`, приоритет `--env KEY`, игнорирование нестроковых `kind`/`inv`, отпечаток отклонённого конфига) действуют как описано.
+## L27 — Code review fixes for L22–L26 (clarifies L22, L25, L26)
+2026-11-22. Proposed from code review (requires owner confirmation). Behavioural changes:
+- `[witnessbox].ebt_repo` in `.acceptbox.toml` accepts only a URL or an absolute path: a relative path would depend on the caller's cwd rather than `--repo` (`config-invalid`). On `config-invalid`, `inputs.config` records the `commit` and `sha256` of the rejected file.
+- Omitted `--head` is resolved right after the `git` check; resolution failure yields `gate-error` with `accept.json`, not a CLI error. Leading `~` in `--repo`/`--ebt-repo`/`ebt_repo` is expanded once during validation.
+- Environment errors (`OSError`) after acquiring `--out` are written to the report as `gate-error`; temporary directory cleanup failures do not change the already-written verdict or exit code.
+- `command` and `witnessbox gate` runs execute in a separate process session; on timeout and after completion, the entire process group is killed.
+- Short `--ebt-ref` names resolve explicitly: `refs/heads/<ref>` first, then `refs/tags/<ref>` (a same-named tag cannot shadow a branch).
+- `--env KEY` without a value when `KEY` is absent from host env removes `KEY` from config (CLI precedence by key).
+- `calibrate` no longer accepts `--tests`: no calibration check used it.
+- `report.json` findings with non-string `kind`/`inv` are ignored as non-matching (previously an unhandled exception exited `1` with no report).
+Documented limitation without code change: when `--ebt-repo` is a local checkout (L22 default), `--ebt-ref` ancestry is checked against the local branch; `--approved-tree` remains the trust anchor. Revisit if: forbidding local `--ebt-repo` by default or verifying refs against a remote repository is needed.
 
-## L29 — Доверенные ветки: `--base-ref` и `--ebt-ref` из `origin` (уточняет L10, L22, L26, L27)
-2026-11-22. Принято владельцем. Опциональный флаг `--base-ref <ветка>` (только CLI, не в `.acceptbox.toml`) проверяет до чтения конфига, что `--base` — предок ветки; отказ — `base-not-on-ref` (код `1`). Ветка для `--base-ref` и `--ebt-ref` берётся из доверенного источника: URL — как есть, локальный путь — из его remote `origin`; без `origin` — из самого локального репозитория с пометкой `ref_source_kind: "local"` в отчёте (слабая проверка, как в L27). URL `origin` проверяется (не начинается с `-`, без управляющих символов) и передаётся в `git fetch` после `--`; сбой чтения `origin`, кроме «remote не настроен», даёт `gate-error`. Граница доверия — `.git/config` локального checkout: агент с правом записи в него может перенаправить или удалить `origin`; источник ветки фиксируется в отчёте (`ref_source`, `ref_source_kind`), полная гарантия — при запуске вне досягаемости агента (CI) или с `--repo`/`--ebt-repo` в виде URL. Значение по умолчанию `--ebt-repo` из L22 не меняется. Пересмотреть, если: потребуется запрет запасного пути `local` или `--base-ref` в `calibrate`.
+## L28 — Confirmation of L27
+2026-11-22. Accepted by owner. Decision **L27** is confirmed as written on 2026-11-22 without changes: `[witnessbox].ebt_repo` in `.acceptbox.toml` must be a URL or absolute path; `calibrate` does not accept `--tests`; with a local `--ebt-repo` (L22 default), the weak `--ebt-ref` ancestry check remains a documented limitation with `--approved-tree` as the trust anchor. All other items of L27 (resolving `--head` after `git` check, recording `OSError` in the report, killing the process group, `--ebt-ref` resolution order, `--env KEY` precedence, ignoring non-string `kind`/`inv`, fingerprinting rejected configs) take effect as described.
+
+## L29 — Trusted refs: `--base-ref` and `--ebt-ref` from `origin` (clarifies L10, L22, L26, L27)
+2026-11-22. Accepted by owner. Optional `--base-ref <ref>` flag (CLI-only, disallowed in `.acceptbox.toml`) verifies before reading the config that `--base` is an ancestor of the ref; failure returns `base-not-on-ref` (exit code `1`). The ref for `--base-ref` and `--ebt-ref` is taken from a trusted source: a URL as-is, a local path via its remote `origin`; without `origin`, from the local repository itself with `ref_source_kind: "local"` recorded in the report (weak check, as in L27). The `origin` URL is validated (no leading `-`, no control characters) and passed to `git fetch` after `--`; any failure reading `origin` other than "no such remote" yields `gate-error`. Trust boundary: `.git/config` of the local checkout — an agent with write access to it can repoint or delete `origin`; the ref source is recorded in the report (`ref_source`, `ref_source_kind`), and full assurance requires running outside the agent's reach (CI) or passing `--repo`/`--ebt-repo` as URLs. The L22 default for `--ebt-repo` is unchanged. Revisit if: disabling the `local` fallback or adding `--base-ref` to `calibrate` is needed.
