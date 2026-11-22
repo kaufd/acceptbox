@@ -44,7 +44,7 @@ Stop and ask the human instead of guessing when:
 ## Stage 0. Environment
 
 ```sh
-acceptbox --installation || uv tool install acceptbox==0.2.0
+acceptbox --installation || uv tool install acceptbox
 acceptbox --installation
 ```
 

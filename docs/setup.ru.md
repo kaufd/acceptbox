@@ -205,7 +205,7 @@ argv = ["./scripts/acceptbox-test.sh"]
 ebt_ref = "main"
 ```
 
-Для обычных багфиксов запускайте `acceptbox accept ...` в режиме `command`, а для приёмки по утверждённым EBT-инвариантам передавайте `--mode witnessbox --inv INV-1 --ebt-sha <sha> --approved-tree <sha256>`.
+Для обычных багфиксов запускайте `acceptbox accept --base-ref main` в режиме `command` (или `--policy refactor` для рефакторингов), а для приёмки по утверждённым EBT-инвариантам — `acceptbox accept --mode witnessbox --base-ref main --pin-from-ref`.
 
 ## Контракт скрипта-обёртки
 
@@ -235,10 +235,10 @@ ebt_ref = "main"
 
 ## Жёсткие правила
 
-1. **Понимайте область применимости.** Используйте цепочку `base → repro → head` для **багфиксов**
-   (и для инвариантов, утверждённых человеком в `--mode witnessbox`). Не фабрикуйте фиктивный
-   `repro`-тест для новой фичи без утверждённой человеком спецификации и не загоняйте чистые
-   рефакторинги в `base → repro → head`.
+1. **Понимайте область применимости.** Используйте `base → repro → head` (`--policy bugfix`) для
+   **багфиксов** (и инвариантов, утверждённых человеком в `--mode witnessbox`). Используйте
+   `--policy refactor` (`base` зелёный → `head` зелёный без правок тестов) для **рефакторингов**.
+   Не фабрикуйте фиктивный `repro`-тест для новой фичи без утверждённой человеком спецификации.
 2. **Строгая двухкоммитная структура багфикса (`base → repro → head`):**
    - Стартуйте от чистого коммита `base` в основной ветке (например, `main`).
    - **Коммит 1 (`repro`):** меняйте **только** тестовые файлы, попадающие под `[command].tests` в
@@ -266,13 +266,17 @@ ebt_ref = "main"
 
 ## Команда локальной самопроверки
 
-Запускайте из корня репозитория после коммита `repro` и `head` (незакоммиченные правки игнорируются):
+Запускайте из корня репозитория после коммита (незакоммиченные правки игнорируются):
 
 ```sh
-acceptbox accept \
-  --base-ref main \
-  --base "$(git merge-base main HEAD)" \
-  --repro <repro_sha>
+# Багфикс (command):
+acceptbox accept --base-ref main
+
+# Рефакторинг (command):
+acceptbox accept --policy refactor --base-ref main
+
+# Режим WitnessBox (опционально --inv, --policy refactor):
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
 ```
 
 Примечание: локальный запуск — это самопроверка; окончательный доверенный вердикт выдаёт человек

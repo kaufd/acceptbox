@@ -14,7 +14,7 @@ acceptbox --installation
 - `format`: `1`
 - `report_format`: `1`
 - `distribution`: `"acceptbox"`
-- `version`: установленная версия (например, `"0.2.0"`)
+- `version`: установленная версия (например, `"0.3.0"`)
 - `git`: статус (`"ok" | "missing" | "error"`), путь, версия
 - `witnessbox`: путь, версия, `supported: ">=0.10.0"`, статус (`"compatible" | "missing" | "incompatible" | "error"`)
 
@@ -87,11 +87,11 @@ acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project r
 
 ### Политики приёмки (`--policy bugfix` и `--policy refactor`)
 
-- **`--policy bugfix` (по умолчанию, только CLI):** требует `--repro` и проверяет цепочку `base → repro → head` (`repro` красный, `head` зелёный; в `witnessbox` также `base` красный по `--inv`).
-- **`--policy refactor` (только CLI, L24/L30):** запрещает `--repro`, работает в обоих режимах (`command` и `witnessbox`), проверяет ancestry `base → head` (`head-not-descendant`) и непустоту `base..head` (`refactor-empty`), автоматически защищает `.acceptbox.toml` плюс `[command].tests` (в `command`) или `ebt`/`tool/ebt_check` (в `witnessbox`) в `base..head` и требует, чтобы **оба** коммита `base` (`base-not-green`) и `head` (`head-not-green`) прошли (`green`). В `witnessbox` + `refactor` флаг `--inv` опционален (без него проверяется вся спецификация).
+- **`--policy bugfix` (по умолчанию, только CLI):** проверяет цепочку `base → repro → head` (`--repro` авто-резолвится из `base..head`, если опущен; `repro` красный, `head` зелёный; в `witnessbox` также `base` красный, а `repro` падает по тем же инвариантам).
+- **`--policy refactor` (только CLI, L24/L30):** запрещает `--repro`, работает в обоих режимах (`command` и `witnessbox`), проверяет ancestry `base → head` (`head-not-descendant`) и непустоту `base..head` (`refactor-empty`), автоматически защищает `.acceptbox.toml` плюс `[command].tests` (в `command`) или `ebt`/`tool/ebt_check` (в `witnessbox`) в `base..head` и требует, чтобы **оба** коммита `base` (`base-not-green`) и `head` (`head-not-green`) прошли (`green`).
 
 ```sh
-acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git merge-base main HEAD)"
+acceptbox accept --policy refactor --base-ref main
 ```
 
 ### Режим `command`
@@ -124,16 +124,25 @@ acceptbox accept \
 
 ### Режим `witnessbox`
 
+Минимальный локальный запуск (при `[witnessbox].ebt_ref = "main"` в `.acceptbox.toml`):
+
+```sh
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
+```
+
+Явный запуск с внешней фиксацией:
+
 ```sh
 acceptbox accept \
   --mode witnessbox \
   --base <полный-sha> \
   --repro <полный-sha> \
-  --inv INV-1,INV-2 \
   --ebt-ref main \
   --ebt-sha <полный-sha> \
   --approved-tree <64-hex-sha256> \
+  [--inv INV-1,INV-2] \
   [--base-ref main] \
+  [--strict-refs] \
   [--repo /path/to/project] \
   [--head <полный-sha>] \
   [--ebt-repo /path/to/ebt-repo] \
@@ -143,7 +152,7 @@ acceptbox accept \
   [--out /tmp/accept-ebt-run]
 ```
 
-В режиме `witnessbox` пути `ebt` и `tool/ebt_check` защищаются всегда, `base` и `repro` должны быть `red` с находками `FALSE_PROOF` или `CONFIRMED_VIOLATION` хотя бы по одному инварианту из `--inv`, а `head` — `green`.
+В режиме `witnessbox` пути `ebt` и `tool/ebt_check` защищаются всегда. В политике `bugfix` коммиты `base` и `repro` должны быть `red` с находками `FALSE_PROOF` или `CONFIRMED_VIOLATION` хотя бы по одному целевому инварианту (из `--inv`, либо определённому автоматически по `base`), а `head` — `green`.
 
 ## Калибровка чувствительности (`calibrate`)
 
@@ -215,7 +224,7 @@ acceptbox calibrate \
 
 ### Коды `ERROR` (код `2`) и правило записи отчёта
 
-- **Отчёт не создаётся:** ошибки синтаксиса CLI, `out-not-empty`, а также нехватка обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или смешивание флагов режимов, обнаруженные после чтения `base:.acceptbox.toml`. Если пустой каталог `--out` был создан текущим запуском, он удаляется.
+- **Отчёт не создаётся:** ошибки синтаксиса CLI, `out-not-empty`, а также нехватка обязательных аргументов (`--tests`, команды после `--`, `--ebt-ref`, `--ebt-sha` / `--approved-tree` без `--pin-from-ref`) или смешивание флагов режимов, обнаруженные после чтения `base:.acceptbox.toml`. Если пустой каталог `--out` был создан текущим запуском, он удаляется.
 - **Отчёт записывается атомарно** (путь печатается в `stderr`) во всех остальных случаях кода `2` после захвата `--out`: `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, `gate-error`.
 
 ## Разработка, сборка и выпуск релиза

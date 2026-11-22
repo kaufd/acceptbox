@@ -14,7 +14,7 @@ Prints format-`1` JSON containing:
 - `format`: `1`
 - `report_format`: `1`
 - `distribution`: `"acceptbox"`
-- `version`: installed version (e.g. `"0.2.0"`)
+- `version`: installed version (e.g. `"0.3.0"`)
 - `git`: status (`"ok" | "missing" | "error"`), path, version
 - `witnessbox`: path, version, `supported: ">=0.10.0"`, status (`"compatible" | "missing" | "incompatible" | "error"`)
 
@@ -87,11 +87,11 @@ Reads the `ebt/` tree directly from Git objects of `--ebt-sha` (ignoring uncommi
 
 ### Policies (`--policy bugfix` vs `--policy refactor`)
 
-- **`--policy bugfix` (default, CLI-only):** requires `--repro` and verifies `base → repro → head` (`repro` red, `head` green; in `witnessbox` mode `base` must also be red on `--inv`).
-- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`). In `witnessbox` + `refactor`, `--inv` is optional (checks all invariants when omitted).
+- **`--policy bugfix` (default, CLI-only):** verifies `base → repro → head` (`--repro` is auto-resolved from `base..head` if omitted; `repro` red, `head` green; in `witnessbox` mode `base` must also be red and `repro` must fail on the same invariant(s)).
+- **`--policy refactor` (CLI-only, L24/L30):** forbids `--repro`, works in both `command` and `witnessbox` modes, verifies `base` is an ancestor of `head` (`head-not-descendant`) and `base..head` is non-empty (`refactor-empty`), auto-protects `.acceptbox.toml` plus `[command].tests` (in `command` mode) or `ebt`/`tool/ebt_check` (in `witnessbox` mode) across `base..head`, and requires **both** `base` (`base-not-green`) and `head` (`head-not-green`) to pass (`green`).
 
 ```sh
-acceptbox accept --policy refactor --base-ref main --strict-refs --base "$(git merge-base main HEAD)"
+acceptbox accept --policy refactor --base-ref main
 ```
 
 ### `command` mode
@@ -124,16 +124,25 @@ The command after `--` (or `[command].argv`) runs with `shell=False` in a dedica
 
 ### `witnessbox` mode
 
+Minimal local invocation (with `[witnessbox].ebt_ref = "main"` in `.acceptbox.toml`):
+
+```sh
+acceptbox accept --mode witnessbox --base-ref main --pin-from-ref
+```
+
+Explicit pinned invocation:
+
 ```sh
 acceptbox accept \
   --mode witnessbox \
   --base <full-sha> \
   --repro <full-sha> \
-  --inv INV-1,INV-2 \
   --ebt-ref main \
   --ebt-sha <full-sha> \
   --approved-tree <64-hex-sha256> \
+  [--inv INV-1,INV-2] \
   [--base-ref main] \
+  [--strict-refs] \
   [--repo /path/to/project] \
   [--head <full-sha>] \
   [--ebt-repo /path/to/ebt-repo] \
@@ -143,7 +152,7 @@ acceptbox accept \
   [--out /tmp/accept-ebt-run]
 ```
 
-In `witnessbox` mode, `ebt` and `tool/ebt_check` are always added to protected paths, `base` and `repro` must both be `red` with `FALSE_PROOF` or `CONFIRMED_VIOLATION` on at least one invariant from `--inv`, and `head` must be `green`.
+In `witnessbox` mode, `ebt` and `tool/ebt_check` are always added to protected paths. In `bugfix` policy, `base` and `repro` must both be `red` with `FALSE_PROOF` or `CONFIRMED_VIOLATION` on at least one target invariant (from `--inv`, or inferred from `base` when `--inv` is omitted), and `head` must be `green`.
 
 ## Sensitivity calibration (`calibrate`)
 
@@ -215,7 +224,7 @@ acceptbox calibrate \
 
 ### `ERROR` reason codes (exit code `2`) and report-writing rule
 
-- **No report written:** CLI syntax errors, `out-not-empty`, and missing required arguments (`--tests`, command after `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) or cross-mode flag mixing discovered after reading `base:.acceptbox.toml`. If the current invocation created an empty `--out` directory, it is removed.
+- **No report written:** CLI syntax errors, `out-not-empty`, and missing required arguments (`--tests`, command after `--`, `--ebt-ref`, `--ebt-sha` / `--approved-tree` without `--pin-from-ref`) or cross-mode flag mixing discovered after reading `base:.acceptbox.toml`. If the current invocation created an empty `--out` directory, it is removed.
 - **Report written atomically** (and its path printed to `stderr`) for all other exit-code-`2` errors after acquiring `--out`: `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, and `gate-error`.
 
 ## Development, building, and releasing

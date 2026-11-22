@@ -44,7 +44,7 @@
 ## Стадия 0. Окружение
 
 ```sh
-acceptbox --installation || uv tool install acceptbox==0.2.0
+acceptbox --installation || uv tool install acceptbox
 acceptbox --installation
 ```
 
