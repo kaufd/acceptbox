@@ -4,9 +4,11 @@
 
 AcceptBox ships two reusable composite GitHub Actions — [`actions/setup`](../actions/setup/action.yml) and [`actions/accept`](../actions/accept/action.yml) — so bugfix and refactoring pull requests can be accepted automatically with minimal or zero human operator involvement.
 
-## Architecture: human approval only on rule changes
+## Architecture: pragmatic zero-operator loop (no containers needed)
 
-To eliminate manual SHA copying and per-PR operator steps without weakening security, split the repository into two trust zones using **Branch Protection + `CODEOWNERS`**:
+This workflow is built for the practical default model: **the coding agent may make mistakes, forget to reproduce a bug, or accidentally alter tests, but is not running an active attack against the host**. You do not need Docker sandboxes, two-stage `workflow_run` replay, or cryptographic attestations to run an autonomous pipeline.
+
+Split the repository into two simple zones using **Branch Protection + `CODEOWNERS`**:
 
 1. **Human-approved rule paths (`CODEOWNERS` required on `main`):**
    ```text
@@ -15,13 +17,13 @@ To eliminate manual SHA copying and per-PR operator steps without weakening secu
    /scripts/acceptbox-test.sh  @owner
    /.github/workflows/         @owner
    ```
-   A human reviews and approves pull requests **only** when a new invariant, spec edit, or test-runner change is introduced.
+   A human reviews PRs **only** when a new invariant, spec edit, or test-runner change is introduced.
 2. **Autonomous execution & acceptance loop (zero operator):**
-   - An AI coding agent works in an isolated branch/container with no push rights to `main`, creates `base → repro → head` (for bugfixes) or `base → head` (for refactorings), self-checks locally, and opens a PR.
-   - `actions/accept` runs in GitHub Actions (outside the agent's checkout), automatically resolves `policy`, `repro`, and (for `witnessbox` mode) pins `ebt/` from trusted `origin/main`, enforces `--strict-refs`, uploads `accept.json`, posts/updates a sticky PR verdict comment (with failing log tails so an agent can self-correct), and sets the `acceptbox/accept` commit status.
+   - The AI agent works in a normal branch/checkout, creates `base → repro → head` (bugfix) or `base → head` (refactor), self-checks locally with `acceptbox accept`, and opens a PR.
+   - `actions/accept` runs in a single GitHub Actions job on `pull_request`, automatically resolves `policy`, `repro`, and (for `witnessbox` mode) pins `ebt/` from `origin/main`, uploads `accept.json`, posts/updates a sticky PR verdict comment (with failing log tails so the agent can self-correct), and sets the `acceptbox/accept` commit status.
    - When `acceptbox/accept` is `success` and no `CODEOWNERS` paths were modified:
-     - in **`witnessbox` mode** (human-approved invariants), the PR can be **auto-merged** safely;
-     - in **`command` mode**, either review only the small `base..repro` diff or add an independent LLM check on `base..repro` before auto-merge.
+     - in **`witnessbox` mode** (human-approved invariants), enable **auto-merge** directly;
+     - in **`command` mode**, either skim the small `base..repro` diff or add an independent LLM check on `base..repro` before auto-merge.
 
 ## Template `.github/workflows/acceptbox.yml`
 
