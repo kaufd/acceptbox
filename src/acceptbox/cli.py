@@ -31,6 +31,7 @@ from .report import (OutDirLock, OutNotEmptyError, atomic_write_json, completed_
 from .verdict import (RunOutcome, Verdict, ancestry_verdict, base_not_on_ref, coverage,
                       evaluate_runs, inputs_untrusted, no_invariants,
                       protected_paths_verdict, ref_source_local, base_head_ancestry_verdict,
+                      feature_empty_verdict, feature_tests_verdict,
                       refactor_empty_verdict, repro_ambiguous, repro_tests_verdict, run_verdict)
 from .verdict import error as error_verdict
 from .witnessbox import (WITNESSBOX_SUPPORTED_TEXT, check_witnessbox_installation,
@@ -39,6 +40,7 @@ from .witnessbox import (WITNESSBOX_SUPPORTED_TEXT, check_witnessbox_installatio
 DEFAULT_TIMEOUT_SEC = 600.0
 BASE_SKIP_REASON = "base commit is not run in command mode"
 REFACTOR_REPRO_SKIP_REASON = "repro commit is not used in refactor policy"
+FEATURE_SKIP_REASON = "not run in feature policy"
 NOT_RUN_REASON = "run was not executed"
 
 
@@ -72,7 +74,7 @@ def _resolve_repro_commit(clone: Path, git_env: dict[str, str],
 
 
 def _spec_invariants(spec_path: Path) -> list[str]:
-    """ID инвариантов ``[inv.*]`` из ebt/spec.toml: область проверки refactor без --inv."""
+    """ID инвариантов ``[inv.*]`` из ebt/spec.toml: область проверки refactor и feature без --inv."""
     try:
         spec = tomllib.loads(spec_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as failure:
@@ -289,7 +291,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             repro_source: str | None = "explicit" if repro is not None else None
         else:
             if args.repro is not None:
-                raise InputError("--repro is not used in refactor policy")
+                raise InputError(f"--repro is not used in {policy} policy")
             repro = None
             repro_source = None
         if pin_from_ref and (args.ebt_sha is not None or args.approved_tree is not None):
@@ -358,21 +360,25 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     ebt_ref_source = ebt_ref_kind = None
     findings_inv: list[str] = []
     spec_invs: list[str] | None = None
-    runs = {"base": skipped_run(base, BASE_SKIP_REASON if (mode == "command" and policy == "bugfix") else NOT_RUN_REASON),
-            "repro": skipped_run(repro, REFACTOR_REPRO_SKIP_REASON if policy == "refactor" else NOT_RUN_REASON),
+    runs = {"base": skipped_run(base, FEATURE_SKIP_REASON if policy == "feature"
+                                else (BASE_SKIP_REASON if (mode == "command" and policy == "bugfix")
+                                      else NOT_RUN_REASON)),
+            "repro": skipped_run(repro, FEATURE_SKIP_REASON if policy == "feature"
+                                 else (REFACTOR_REPRO_SKIP_REASON if policy == "refactor"
+                                       else NOT_RUN_REASON)),
             "head": skipped_run(head, NOT_RUN_REASON)}
     checks = {"base_ref": {"status": "skipped" if base_ref is None else "not-run"},
               "ebt_trust": {"status": "skipped" if mode == "command" else "not-run"},
               "ancestry": {"status": "not-run"},
               "protected_paths": {"status": "not-run"},
-              "repro_tests": {"status": "skipped", "reason": "policy=refactor"}
-              if policy == "refactor"
+              "repro_tests": {"status": "skipped", "reason": f"policy={policy}"}
+              if policy in ("refactor", "feature")
               else {"status": "skipped" if mode == "witnessbox" else "not-run"}}
 
     def finish(verdict: Verdict, coverage_override: dict | None = None) -> int:
         assert out_path is not None
         finished_at = utc_now_iso()
-        if policy == "refactor":
+        if policy in ("refactor", "feature"):
             scope_invariants = inv_list if inv_list is not None else (spec_invs or [])
         elif mode == "witnessbox" and inv_list is None:
             scope_invariants = sorted(set(findings_inv))  # выведены из прогона base (L30)
@@ -425,7 +431,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "message": verdict.message,
             "coverage": coverage_override or coverage(
                 mode, scope_invariants, findings_inv,
-                all_green=policy == "refactor" and verdict.result == "ACCEPTED"),
+                all_green=policy in ("refactor", "feature") and verdict.result == "ACCEPTED"),
             "warnings": warnings,
         }
         report_path = atomic_write_json(out_path, "accept.json", payload)
@@ -524,12 +530,14 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                 or "command")
                         scope = "command-only" if mode == "command" else "ebt-only"
                         runs["base"] = skipped_run(
-                            base, BASE_SKIP_REASON if (mode == "command" and policy == "bugfix")
-                            else NOT_RUN_REASON)
+                            base, FEATURE_SKIP_REASON if policy == "feature"
+                            else (BASE_SKIP_REASON if (mode == "command" and policy == "bugfix")
+                                  else NOT_RUN_REASON))
                         checks["ebt_trust"] = {
                             "status": "skipped" if mode == "command" else "not-run"}
-                        if policy == "refactor":
-                            checks["repro_tests"] = {"status": "skipped", "reason": "policy=refactor"}
+                        if policy in ("refactor", "feature"):
+                            checks["repro_tests"] = {"status": "skipped",
+                                                     "reason": f"policy={policy}"}
                         else:
                             checks["repro_tests"] = {
                                 "status": "skipped" if mode == "witnessbox" else "not-run"}
@@ -666,7 +674,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                                     "status": "failed", "reason": str(untrusted), **ref_info}
                                 return finish(inputs_untrusted(str(untrusted)))
                             ebt_sha = resolved_ebt_sha
-                            if policy == "refactor" and inv_list is None:
+                            if policy in ("refactor", "feature") and inv_list is None:
                                 try:
                                     spec_invs = _spec_invariants(ebt_dir / "spec.toml")
                                 except _EbtUntrusted as untrusted:
@@ -717,7 +725,9 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 
                         # Стадия 8: защищённые пути.
                         # .acceptbox.toml защищается всегда (L23); в refactor + command
-                        # дополнительно защищаются --tests (L24/L30).
+                        # дополнительно защищаются --tests (L24/L30). В feature + command
+                        # --tests не защищаются целиком: стадия 9 запрещает менять
+                        # существующие тесты и требует новые (L34).
                         extra_protected = (
                             ["ebt", "tool/ebt_check"] if mode == "witnessbox"
                             else (list(tests) if policy == "refactor" and tests else [])
@@ -743,7 +753,8 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         if verdict is not None:
                             return finish(verdict)
 
-                        # Стадия 9: репро-тесты (bugfix+command) или непустой дифф (refactor).
+                        # Стадия 9: репро-тесты (bugfix+command), непустой дифф (refactor)
+                        # или новые тесты без изменения существующих (feature).
                         if policy == "bugfix" and mode == "command":
                             assert repro is not None
                             repro_changed = changed_paths(clone, git_env, base, repro)
@@ -771,12 +782,42 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             }
                             if verdict is not None:
                                 return finish(verdict)
+                        elif policy == "feature":
+                            head_changed = changed_paths(clone, git_env, base, head)
+                            verdict = feature_empty_verdict(head_changed=head_changed)
+                            if mode == "command":
+                                if verdict is None:
+                                    tests_modified = changed_paths(
+                                        clone, git_env, base, head, tests, diff_filter="a")
+                                    tests_added = changed_paths(
+                                        clone, git_env, base, head, tests, diff_filter="A")
+                                    verdict = feature_tests_verdict(
+                                        tests_added=tests_added,
+                                        tests_modified=tests_modified)
+                                else:
+                                    tests_added = []
+                                    tests_modified = []
+                                checks["feature"] = {
+                                    "status": "ok" if verdict is None else "failed",
+                                    "changed_base_head": head_changed,
+                                    "tests_added": tests_added,
+                                    "tests_modified": tests_modified,
+                                }
+                            else:
+                                checks["feature"] = {
+                                    "status": "ok" if verdict is None else "failed",
+                                    "changed_base_head": head_changed,
+                                }
+                            if verdict is not None:
+                                return finish(verdict)
 
                         # Стадия 10: последовательные fail-fast прогоны.
                         executed: list[tuple[str, RunOutcome]] = []
                         inferred_invs: list[str] | None = None
-                        if policy == "refactor":
-                            order: tuple[str, ...] = ("base", "head")
+                        if policy == "feature":
+                            order: tuple[str, ...] = ("head",)
+                        elif policy == "refactor":
+                            order = ("base", "head")
                         else:
                             order = ("base", "repro", "head") if mode == "witnessbox" \
                                 else ("repro", "head")
@@ -1173,7 +1214,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="acceptbox",
         description="Independent commit acceptance gate: base -> repro -> head "
-                    "(bugfixes, refactorings, and approved invariants).",
+                    "(bugfixes, refactorings, features, and approved invariants).",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--installation", action="store_true",
@@ -1212,9 +1253,10 @@ def _add_accept_flags(subparser: argparse.ArgumentParser) -> None:
         "--mode", default=None, choices=("command", "witnessbox"),
         help="acceptance mode (defaults to .acceptbox.toml or command)")
     subparser.add_argument(
-        "--policy", default="bugfix", choices=("bugfix", "refactor"),
-        help="acceptance policy: bugfix (base -> repro -> head, default) "
-             "or refactor (base green -> head green without --repro, CLI-only, L24/L30)")
+        "--policy", default="bugfix", choices=("bugfix", "refactor", "feature"),
+        help="acceptance policy: bugfix (base -> repro -> head, default), "
+             "refactor (base green -> head green without --repro, CLI-only, L24/L30), or "
+             "feature (head green, existing tests unchanged, new tests required; CLI-only, L34)")
     subparser.add_argument(
         "--repo", default=".",
         help="path or URL of the target repository (default: .)")
@@ -1224,7 +1266,7 @@ def _add_accept_flags(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--repro", default=None,
         help="full SHA of repro commit (in bugfix auto-resolved from base..head "
-             "if omitted; forbidden in refactor)")
+             "if omitted; forbidden in refactor and feature)")
     subparser.add_argument(
         "--base-ref",
         help="trusted ref that --base must be an ancestor of; fetched from origin of local "

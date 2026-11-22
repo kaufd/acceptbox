@@ -85,7 +85,7 @@ acceptbox render /path/to/accept.json --format html --out report.html
 
 - **Bugfixes** (`command` or `witnessbox` mode): the primary use case for `base → repro → head`.
 - **Human-approved invariants** (`witnessbox` mode): works for both bugfixes and features when a human approves `ebt/spec.toml` before implementation.
-- **New features without an approved spec**: a failing `repro` test written by the same agent that writes the implementation does not give a strong guarantee — the agent can fit the test and the code to each other. Use a human-approved specification (`witnessbox` mode) and/or independent review.
+- **New features without an approved spec** (`--policy feature`): verifies that `head` is green, existing tests are untouched, and new test files were added — it does **not** verify that the feature matches the intended behaviour. To verify intent, use a human-approved specification (`witnessbox` mode) and/or human-approved scenario verification (see [feature verification for the orchestrator or verifier agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md#7-feature-verification-for-orchestrator-or-verifier-agent)).
 - **Refactorings** (`--policy refactor`, `base` green → `head` green without `--repro`): orthogonal to `--mode`; verifies that both `base` and `head` pass while automatically protecting `.acceptbox.toml` and `[command].tests` (or `ebt/` and `tool/ebt_check` in `witnessbox` mode).
 
 ## Guarantees and limits
@@ -104,7 +104,7 @@ AcceptBox enforces commit structure, file immutability, and clean-worktree execu
 - [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
 - [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.
 - [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `render`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
-- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L32`).
+- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L34`).
 
 Documentation is available in English and Russian; every page links to its translation.
 

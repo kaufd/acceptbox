@@ -102,6 +102,38 @@ def _make_command_refactor_fixture(tmp: Path, *, base_green: bool = True) -> dic
     return {"repo": repo, "base": base, "head": head}
 
 
+def _make_command_feature_fixture(tmp: Path) -> dict:
+    repo = tmp / "repo"
+    _init_repo(repo)
+    (repo / "app.py").write_text("def double(x):\n    return x * 2\n", encoding="utf-8")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_app.py").write_text(
+        "import unittest\nfrom app import double\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_double(self): self.assertEqual(double(3), 6)\n",
+        encoding="utf-8",
+    )
+    (repo / ".acceptbox.toml").write_text(
+        'format = 1\nmode = "command"\n\n[command]\ntests = ["tests/"]\n'
+        f'argv = [{json.dumps(PYTHON)}, "-m", "unittest", "discover", "-s", "tests"]\n',
+        encoding="utf-8",
+    )
+    base = _commit(repo, "base")
+
+    (repo / "app.py").write_text(
+        "def double(x):\n    return x * 2\n\ndef triple(x):\n    return x * 3\n",
+        encoding="utf-8",
+    )
+    (repo / "tests" / "test_triple.py").write_text(
+        "import unittest\nfrom app import triple\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_triple(self): self.assertEqual(triple(3), 9)\n",
+        encoding="utf-8",
+    )
+    head = _commit(repo, "feature: add triple")
+    return {"repo": repo, "base": base, "head": head}
+
+
 def _make_witnessbox_refactor_fixture(tmp: Path, *, head_state: str = "green",
                                       base_state: str = "green") -> dict:
     repo = tmp / "repo"
@@ -382,6 +414,238 @@ class TestRefactorPolicyWitnessbox(unittest.TestCase):
                 json.loads((out2 / "accept.json").read_text(encoding="utf-8"))["reason_code"],
                 "head-not-green",
             )
+
+
+class TestFeaturePolicyCommand(unittest.TestCase):
+    def test_feature_command_happy_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fx = _make_command_feature_fixture(tmp)
+            out = tmp / "out"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", fx["head"], "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["result"], "ACCEPTED")
+            self.assertEqual(data["policy"], "feature")
+            self.assertEqual(data["runs"]["base"]["status"], "skipped")
+            self.assertEqual(data["runs"]["repro"]["status"], "skipped")
+            self.assertEqual(data["runs"]["head"]["status"], "green")
+            self.assertEqual(data["checks"]["repro_tests"]["status"], "skipped")
+            feature = data["checks"]["feature"]
+            self.assertEqual(feature["status"], "ok")
+            self.assertEqual(feature["tests_added"], ["tests/test_triple.py"])
+            self.assertEqual(feature["tests_modified"], [])
+            self.assertIn("app.py", feature["changed_base_head"])
+            self.assertIn("tests/test_triple.py", feature["changed_base_head"])
+            self.assertNotIn("tests/", data["checks"]["protected_paths"]["specs"])
+            self.assertEqual(data["runs"]["base"]["reason"], "not run in feature policy")
+            self.assertEqual(data["runs"]["repro"]["reason"], "not run in feature policy")
+            self.assertEqual(data["checks"]["repro_tests"]["reason"], "policy=feature")
+            self.assertIn(".acceptbox.toml", data["checks"]["protected_paths"]["specs"])
+            self.assertIn("not verified (policy=feature)", res.stdout)
+
+            report = out / "accept.json"
+            for fmt in ("md", "html"):
+                rendered = _run_cli(["render", str(report), "--format", fmt])
+                self.assertEqual(rendered.returncode, 0, rendered.stderr)
+                for expected in ("[policy=feature]", "tests_added", "tests/test_triple.py",
+                                 "not verified (policy=feature)"):
+                    self.assertIn(expected, rendered.stdout)
+
+    def test_feature_command_rejects_modified_renamed_deleted_or_helper_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+
+            fx = _make_command_feature_fixture(tmp / "modified")
+            (fx["repo"] / "tests" / "test_app.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n"
+                "    def test_ok(self): pass\n",
+                encoding="utf-8",
+            )
+            modified_head = _commit(fx["repo"], "modify existing test")
+            out = tmp / "out_modified"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", modified_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "existing-tests-modified")
+            self.assertIn("tests/test_app.py", data["checks"]["feature"]["tests_modified"])
+
+            fx = _make_command_feature_fixture(tmp / "renamed")
+            _git(fx["repo"], "mv", "tests/test_app.py", "tests/test_app2.py")
+            renamed_head = _commit(fx["repo"], "rename existing test")
+            out = tmp / "out_renamed"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", renamed_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "existing-tests-modified")
+            self.assertIn("tests/test_app.py", data["checks"]["feature"]["tests_modified"])
+
+            fx = _make_command_feature_fixture(tmp / "deleted")
+            (fx["repo"] / "tests" / "test_app.py").unlink()
+            deleted_head = _commit(fx["repo"], "delete existing test")
+            out = tmp / "out_deleted"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", deleted_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "existing-tests-modified")
+            self.assertIn("tests/test_app.py", data["checks"]["feature"]["tests_modified"])
+
+            fx = _make_command_feature_fixture(tmp / "helper")
+            repo = fx["repo"]
+            _git(repo, "checkout", "-q", "-B", "feature/helper", fx["base"])
+            (repo / "tests" / "helpers.py").write_text("VAL = 1\n", encoding="utf-8")
+            helper_base = _commit(repo, "base with helper")
+            _git(repo, "checkout", fx["head"], "--", "app.py", "tests/test_triple.py")
+            (repo / "tests" / "helpers.py").write_text("VAL = 2\n", encoding="utf-8")
+            helper_head = _commit(repo, "modify helper and add test")
+            out = tmp / "out_helper"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(repo),
+                "--base", helper_base, "--head", helper_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "existing-tests-modified")
+            self.assertIn("tests/helpers.py", data["checks"]["feature"]["tests_modified"])
+
+    def test_feature_command_rejects_no_tests_test_outside_tests_and_empty_diff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+
+            fx = _make_command_feature_fixture(tmp / "no-tests")
+            _git(fx["repo"], "checkout", "-q", "-B", "feature/no-tests", fx["base"])
+            (fx["repo"] / "app.py").write_text(
+                "def double(x):\n    return x * 2\n\ndef triple(x):\n    return x * 3\n",
+                encoding="utf-8",
+            )
+            no_tests_head = _commit(fx["repo"], "feature without tests")
+            out = tmp / "out_no_tests"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", no_tests_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "feature-no-tests")
+
+            fx = _make_command_feature_fixture(tmp / "outside")
+            _git(fx["repo"], "checkout", "-q", "-B", "feature/outside", fx["base"])
+            (fx["repo"] / "src").mkdir()
+            (fx["repo"] / "src" / "test_triple.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n"
+                "    def test_ok(self): self.assertTrue(True)\n",
+                encoding="utf-8",
+            )
+            outside_head = _commit(fx["repo"], "add test outside tests")
+            out = tmp / "out_outside"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", outside_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "feature-no-tests")
+
+            fx = _make_command_feature_fixture(tmp / "empty")
+            out = tmp / "out_empty"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", fx["base"], "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "feature-empty")
+            self.assertEqual(
+                data["checks"]["feature"],
+                {"status": "failed", "changed_base_head": [], "tests_added": [],
+                 "tests_modified": []},
+            )
+
+    def test_feature_command_rejects_red_head_and_repro_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fx = _make_command_feature_fixture(tmp)
+            repo = fx["repo"]
+            _git(repo, "checkout", "-q", "-B", "feature/red", fx["head"])
+            (repo / "tests" / "test_failing.py").write_text(
+                "import unittest\nclass T(unittest.TestCase):\n"
+                "    def test_fails(self): self.assertTrue(False)\n",
+                encoding="utf-8",
+            )
+            red_head = _commit(repo, "add failing test")
+            out = tmp / "out"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(repo),
+                "--base", fx["base"], "--head", red_head, "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 1, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["reason_code"], "head-not-green")
+
+            out2 = tmp / "out2"
+            res2 = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(repo),
+                "--base", fx["base"], "--repro", fx["head"], "--head", fx["head"],
+                "--out", str(out2),
+            ])
+            self.assertEqual(res2.returncode, 2)
+            self.assertIn("--repro is not used in feature policy", res2.stderr)
+
+    def test_feature_one_liner_with_base_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fx = _make_command_feature_fixture(tmp)
+            _git(fx["repo"], "checkout", "-q", "-b", "feature/triple")
+            # Move main back to base before cloning origin, so origin/main is at base.
+            _git(fx["repo"], "update-ref", "refs/heads/main", fx["base"])
+            _add_origin(fx["repo"])
+            out = tmp / "out"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--repo", str(fx["repo"]),
+                "--base-ref", "main", "--head", fx["head"], "--out", str(out),
+            ])
+            self.assertEqual(res.returncode, 0, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["result"], "ACCEPTED")
+            self.assertEqual(data["repo"]["base"], fx["base"])
+
+
+class TestFeaturePolicyWitnessbox(unittest.TestCase):
+    def test_witnessbox_feature_runs_head_only_and_covers_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fx = _make_witnessbox_refactor_fixture(tmp, base_state="red", head_state="green")
+            env = _install_fake_witnessbox(tmp)
+            out = tmp / "out"
+            res = _run_cli([
+                "accept", "--policy", "feature", "--mode", "witnessbox",
+                "--repo", str(fx["repo"]),
+                "--base", fx["base"], "--head", fx["head"],
+                "--ebt-sha", fx["ebt_sha"], "--approved-tree", fx["approved_tree"],
+                "--out", str(out),
+            ], env=env)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            data = json.loads((out / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["result"], "ACCEPTED")
+            self.assertEqual(data["runs"]["base"]["status"], "skipped")
+            self.assertEqual(data["runs"]["repro"]["status"], "skipped")
+            self.assertEqual(data["runs"]["head"]["status"], "green")
+            self.assertEqual(data["coverage"],
+                             {"checked": ["INV-1"], "skipped": [], "unchecked": []})
+            self.assertNotIn("tests_added", data["checks"]["feature"])
+            self.assertNotIn("tests_modified", data["checks"]["feature"])
 
 
 class TestLocalAutoResolve(unittest.TestCase):
