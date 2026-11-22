@@ -29,6 +29,15 @@ _FALLBACK_LOCAL_ENV_VARS = (
 )
 
 
+# URL (scheme://) или scp-подобный адрес host:path — не локальный путь.
+_REMOTE_SOURCE_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://|[^/]+:")
+
+
+def is_remote_source(value: str) -> bool:
+    """True для URL и scp-адреса репозитория, False для локального пути."""
+    return _REMOTE_SOURCE_RE.match(value) is not None
+
+
 class GitError(Exception):
     """Сбой git-инфраструктуры: git недоступен, репозиторий недостижим, таймаут."""
 
@@ -126,7 +135,9 @@ def commit_present(repo: Path, env: dict[str, str], sha: str) -> bool:
 
 
 def _fetch(repo: Path, env: dict[str, str], source: str, *refspecs: str) -> None:
-    run_git(repo, env, "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", source, *refspecs)
+    # "--": источник (в т.ч. URL origin из .git/config) не может стать опцией fetch.
+    run_git(repo, env, "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "--",
+            source, *refspecs)
 
 
 def fetch_all_refs(repo: Path, env: dict[str, str], source: str) -> None:
@@ -184,6 +195,36 @@ def resolve_repo_head(source: str, env: dict[str, str]) -> str:
         if len(parts) == 2 and parts[1] == "HEAD" and parts[0]:
             return parts[0]
     raise GitError(f"ссылка HEAD не найдена в репозитории {source}")
+
+
+def trusted_ref_source(source: str, env: dict[str, str]) -> tuple[str, str]:
+    """Откуда брать доверенную ветку (L29): ``(источник для fetch, kind)``.
+
+    URL — как есть (``remote``); локальный путь — его remote ``origin``
+    (``origin``), ведь локальные ветки может переписать любой, кто пишет в
+    checkout; без ``origin`` — сам путь (``local``, слабая проверка).
+    """
+    if is_remote_source(source):
+        return source, "remote"
+    argv = ["git", "--no-replace-objects", "-C", source, "remote", "get-url", "origin"]
+    try:
+        result = subprocess.run(argv, env=env, capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise GitError(f"git remote get-url origin: {error}") from error
+    # Код 2 — remote origin не настроен; любой другой сбой (safe.directory и т.п.)
+    # не должен молча ослаблять проверку до локальной ветки.
+    if result.returncode == 2:
+        return source, "local"
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        message = f"git remote get-url origin: код {result.returncode}"
+        raise GitError(f"{message}: {detail[-1]}" if detail else message)
+    url = result.stdout.strip().decode("utf-8", "replace")
+    if not url or url.startswith("-") or any(ord(char) < 32 for char in url):
+        raise GitError(f"недопустимый URL remote origin в {source}: {url!r}")
+    if not is_remote_source(url) and not os.path.isabs(url):
+        url = os.path.normpath(os.path.join(os.path.abspath(source), url))
+    return url, "origin"
 
 
 def fetch_ref(repo: Path, env: dict[str, str], source: str, ref: str) -> str | None:

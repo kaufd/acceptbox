@@ -17,14 +17,14 @@ from .config import (CONFIG_FILENAME, ConfigError, ProjectConfig,
                      load_config_from_commit)
 from .git import (GitError, add_worktree, base_env, changed_paths, clone_no_checkout,
                   ensure_commit, fetch_ref, is_ancestor, probe_git,
-                  resolve_repo_head, rev_parse_tree)
+                  resolve_repo_head, rev_parse_tree, trusted_ref_source)
 from .inputs import (InputError, build_runtime_env, parse_env_entry, parse_invariants,
                      validate_commit_sha, validate_pathspec, validate_ref,
                      validate_repo_source, validate_sha256, validate_timeout)
 from .pin import EbtPathMissing, tree_sha256, tree_sha256_in_repo
 from .report import (OutDirLock, OutNotEmptyError, atomic_write_json, completed_run,
                      skipped_run, utc_now_iso)
-from .verdict import (RunOutcome, Verdict, ancestry_verdict, coverage,
+from .verdict import (RunOutcome, Verdict, ancestry_verdict, base_not_on_ref, coverage,
                       evaluate_runs, inputs_untrusted, no_invariants,
                       protected_paths_verdict, repro_tests_verdict, run_verdict)
 from .verdict import error as error_verdict
@@ -98,18 +98,21 @@ def _reject_cli_cross_mode_mixing(args: argparse.Namespace,
 
 
 def _prepare_ebt(temp: Path, git_env: dict[str, str], ebt_repo: str, ebt_ref: str,
-                ebt_sha: str, approved_tree: str) -> tuple[Path, str, str]:
+                ebt_sha: str, approved_tree: str, ref_source: str) -> tuple[Path, str, str]:
     """Доверенные входы EBT (L10): клон, явный fetch --ebt-ref и --ebt-sha,
     проверка предка, сверка дерева и чистый checkout ebt/ из --ebt-sha.
+
+    Ветка --ebt-ref берётся из ``ref_source`` (trusted_ref_source, L29), коммиты —
+    из ``ebt_repo``.
 
     Возвращает (ebt_dir, actual_tree_sha256, spec_sha256). Кидает _EbtUntrusted
     (→ inputs-untrusted, код 1) и GitError (→ gate-error, код 2).
     """
     ebt_clone = temp / "ebt-repo"
     clone_no_checkout(ebt_repo, ebt_clone, git_env)
-    ref_commit = fetch_ref(ebt_clone, git_env, ebt_repo, ebt_ref)
+    ref_commit = fetch_ref(ebt_clone, git_env, ref_source, ebt_ref)
     if ref_commit is None:
-        raise _EbtUntrusted(f"ссылка --ebt-ref {ebt_ref!r} не найдена в --ebt-repo")
+        raise _EbtUntrusted(f"ссылка --ebt-ref {ebt_ref!r} не найдена в {ref_source}")
     if not ensure_commit(ebt_clone, git_env, ebt_repo, ebt_sha):
         raise _EbtUntrusted(f"коммит --ebt-sha {ebt_sha} не найден в --ebt-repo")
     if not is_ancestor(ebt_clone, git_env, ebt_sha, ref_commit):
@@ -219,6 +222,8 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                        if args.ebt_sha is not None else None)
         cli_approved_tree = (validate_sha256(args.approved_tree, flag="--approved-tree")
                              if args.approved_tree is not None else None)
+        base_ref = (validate_ref(args.base_ref, flag="--base-ref")
+                    if args.base_ref is not None else None)
 
         if args.mode is not None:
             _reject_mode_mixing(args, args.mode, cmd_argv)
@@ -249,11 +254,13 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     wb_bin = "witnessbox"
     head_tree = None
     actual_tree = spec_sha = None
+    ebt_ref_source = ebt_ref_kind = None
     findings_inv: list[str] = []
     runs = {"base": skipped_run(base, BASE_SKIP_REASON if mode == "command" else NOT_RUN_REASON),
             "repro": skipped_run(repro, NOT_RUN_REASON),
             "head": skipped_run(head, NOT_RUN_REASON)}
-    checks = {"ebt_trust": {"status": "skipped" if mode == "command" else "not-run"},
+    checks = {"base_ref": {"status": "skipped" if base_ref is None else "not-run"},
+              "ebt_trust": {"status": "skipped" if mode == "command" else "not-run"},
               "ancestry": {"status": "not-run"},
               "protected_paths": {"status": "not-run"},
               "repro_tests": {"status": "skipped" if mode == "witnessbox" else "not-run"}}
@@ -266,6 +273,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             "protect": protect,
             "env_keys": env_keys,
             "config": config_summary,
+            "base_ref": base_ref,
         }
         if mode == "command":
             inputs_block["command"] = cmd
@@ -275,6 +283,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             inputs_block["ebt"] = {
                 "repo": ebt_repo, "ref": ebt_ref, "sha": ebt_sha,
                 "approved_tree_sha256": approved_tree,
+                "ref_source": ebt_ref_source, "ref_source_kind": ebt_ref_kind,
                 "actual_tree_sha256": actual_tree, "spec_sha256": spec_sha,
             }
         payload = {
@@ -339,6 +348,23 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         if not ensure_commit(clone, git_env, repo, base):
                             return finish(error_verdict(
                                 "gate-error", f"коммит {base} отсутствует в --repo"))
+                        # Стадия 5a': --base в доверенной ветке — до чтения конфига из base (L29).
+                        if base_ref is not None:
+                            ref_source, ref_kind = trusted_ref_source(repo, git_env)
+                            checks["base_ref"] = {
+                                "status": "not-run", "ref": base_ref, "ref_source": ref_source,
+                                "ref_source_kind": ref_kind, "ref_commit": None}
+                            ref_commit = fetch_ref(clone, git_env, ref_source, base_ref)
+                            checks["base_ref"]["ref_commit"] = ref_commit
+                            checks["base_ref"]["status"] = "failed"
+                            if ref_commit is None:
+                                return finish(base_not_on_ref(
+                                    f"ссылка --base-ref {base_ref!r} не найдена в {ref_source}"))
+                            if not is_ancestor(clone, git_env, base, ref_commit):
+                                return finish(base_not_on_ref(
+                                    f"--base {base} не является предком --base-ref {base_ref!r}"
+                                    f" ({ref_source})"))
+                            checks["base_ref"]["status"] = "ok"
                         try:
                             project_config = load_config_from_commit(clone, git_env, base)
                         except ConfigError as cfg_error:
@@ -462,16 +488,20 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                         # Стадия 6: доверенные входы EBT (L10) → inputs-untrusted.
                         ebt_dir = None
                         if mode == "witnessbox":
+                            ebt_ref_source, ebt_ref_kind = trusted_ref_source(ebt_repo, git_env)
+                            ref_info = {"ref_source": ebt_ref_source,
+                                        "ref_source_kind": ebt_ref_kind}
                             try:
                                 ebt_dir, actual_tree, spec_sha = _prepare_ebt(
-                                    temp, git_env, ebt_repo, ebt_ref, ebt_sha, approved_tree)
+                                    temp, git_env, ebt_repo, ebt_ref, ebt_sha, approved_tree,
+                                    ebt_ref_source)
                             except _EbtUntrusted as untrusted:
                                 checks["ebt_trust"] = {
-                                    "status": "failed", "reason": str(untrusted)}
+                                    "status": "failed", "reason": str(untrusted), **ref_info}
                                 return finish(inputs_untrusted(str(untrusted)))
                             checks["ebt_trust"] = {
                                 "status": "ok", "actual_tree_sha256": actual_tree,
-                                "spec_sha256": spec_sha}
+                                "spec_sha256": spec_sha, **ref_info}
 
                         # Стадия 7: ancestry → прогоны не запускаются при отказе.
                         ancestry = {
@@ -656,6 +686,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
     wb_info: dict | None = None
     wb_bin = "witnessbox"
     actual_tree = spec_sha = None
+    ebt_ref_source = ebt_ref_kind = None
     results: list[dict] = []
 
     def finish(result: str, exit_code: int, reason_code: str | None, message: str) -> int:
@@ -673,6 +704,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
             inputs_block["ebt"] = {
                 "repo": ebt_repo, "ref": ebt_ref, "sha": ebt_sha,
                 "approved_tree_sha256": approved_tree,
+                "ref_source": ebt_ref_source, "ref_source_kind": ebt_ref_kind,
                 "actual_tree_sha256": actual_tree, "spec_sha256": spec_sha,
             }
         payload = {
@@ -815,8 +847,10 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 
                         ebt_dir = None
                         if mode == "witnessbox":
+                            ebt_ref_source, ebt_ref_kind = trusted_ref_source(ebt_repo, git_env)
                             ebt_dir, actual_tree, spec_sha = _prepare_ebt(
-                                temp, git_env, ebt_repo, ebt_ref, ebt_sha, approved_tree)
+                                temp, git_env, ebt_repo, ebt_ref, ebt_sha, approved_tree,
+                                ebt_ref_source)
                         targets = ([("green", sha) for sha in greens]
                                    + [("red", sha) for sha in reds])
                         for index, (kind, sha) in enumerate(targets, start=1):
@@ -916,6 +950,10 @@ def _add_accept_flags(subparser: argparse.ArgumentParser) -> None:
         help="путь или URL проверяемого репозитория (по умолчанию .)")
     subparser.add_argument("--base", required=True, help="полный SHA базового коммита")
     subparser.add_argument("--repro", required=True, help="полный SHA репро-коммита")
+    subparser.add_argument(
+        "--base-ref",
+        help="ветка, предком которой должен быть --base; берётся из origin локального "
+             "--repo (только CLI, L29)")
     subparser.add_argument(
         "--head", default=None,
         help="полный SHA головного коммита (по умолчанию HEAD из --repo)")

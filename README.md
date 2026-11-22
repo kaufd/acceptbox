@@ -1,181 +1,106 @@
 # AcceptBox
 
-Инструмент независимой приёмки цепочки коммитов `base → repro → head` в изолированных Git worktree с атомарным машиночитаемым отчётом `accept.json` (формат 1). Runtime использует только стандартную библиотеку Python (`>=3.11`).
+**English** · [Русский](https://github.com/kaufd/acceptbox/blob/main/README.ru.md)
 
-AcceptBox поддерживает два режима приёмки:
-- **`--mode command`** (по умолчанию, L19, L22) — приёмка по обычной тестовой команде без `witnessbox`: `repro` меняет только пути внутри `--tests`, `head` не имеет права менять/переименовывать/удалять файлы репро-теста, `repro` должен завершиться кодом `1` (`red`), `head` — кодом `0` (`green`);
-- **`--mode witnessbox`** — приёмка через внешний CLI [WitnessBox](https://github.com/kaufd/witnessbox) (`>=0.10.0`, без верхней границы, правила L9, L10, L17, L21): проверка доверенного дерева `ebt/`, красная `base` и красный `repro` по целевому инварианту `--inv` (`FALSE_PROOF` / `CONFIRMED_VIOLATION`), зелёный `head`.
+**Independent bugfix acceptance gate for Git commit chains (`base → repro → head`).**
 
-## Область применимости (L24)
+When a developer or AI coding agent submits a bugfix, a passing test suite at the final commit does not prove the bug was genuinely reproduced and fixed: the test might have passed before the fix, or the fix commit might have weakened or deleted the test.
 
-Цепочка `base → repro → head` с красным репро-коммитом предназначена для **багфиксов** (а также для инвариантов, утверждённых человеком до реализации в `--mode witnessbox`).
-Для **новых фич** красный репро-тест, написанный той же моделью, не даёт полезной гарантии, так как модель может подогнать тест и реализацию друг под друга — приёмка фич строится на утверждённой человеком спецификации (D4/L10) и/или независимом ревью и проверке поведения. Политика для **рефакторингов** (`base` зелёный → `head` зелёный без `repro`) ортогональна `--mode` и остаётся отдельной задачей.
+AcceptBox checks the three-commit bugfix chain in isolated temporary Git worktrees (without touching your working tree) and writes an atomic, machine-readable verdict (`accept.json`):
 
-## Установка
+1. **`base`** — the starting commit (e.g., on `main`) where the bug exists.
+2. **`repro`** — a commit that *only* adds a failing reproduction test (proving the bug really fails).
+3. **`head`** — the fix commit that makes the tests pass *without editing, renaming, or deleting* the reproduction test or protected files.
 
-```sh
-uv tool install acceptbox==0.1.0
-```
+The runtime uses only the Python standard library (`>=3.11`) and has zero third-party dependencies.
 
-Для режима `--mode witnessbox` дополнительно установите WitnessBox (опционально):
+## Two acceptance modes
 
-```sh
-uv tool install 'witnessbox>=0.10.0'
-```
+- **`command` mode (default, standalone)** — works with any test runner (`unittest`, `pytest`, `vitest`, `go test`, `cargo test`, `flutter test`, Gradle, etc.) with no extra tools. Verifies that `repro` changes only paths under `--tests` and fails with exit code `1` (`red`), and that `head` leaves those test files untouched and passes with exit code `0` (`green`).
+- **`witnessbox` mode (optional)** — integrates with [WitnessBox](https://github.com/kaufd/witnessbox) (`>=0.10.0`) for evidence-based testing (EBT). Verifies a human-approved `ebt/` tree against a pinned SHA-256 (`acceptbox pin`), confirms both `base` and `repro` fail on the target invariant(s) (`FALSE_PROOF` / `CONFIRMED_VIOLATION`), and confirms `head` passes.
 
-## Проверка установки (`--installation`)
+## Quick start
+
+### 1. Install
 
 ```sh
+uv tool install acceptbox==0.2.0
 acceptbox --installation
 ```
 
-Выводит JSON формата `1` (`format`, `report_format`, `distribution`, `version`, блоки `git` и `witnessbox` с `supported: ">=0.10.0"`). Возвращает код `0`, если доступны `git` и `acceptbox`, независимо от того, установлен ли `witnessbox`; код `2` — только при отсутствии/сбое `git` или ошибке диагностики `acceptbox`.
+*(Optional, only for `--mode witnessbox`: `uv tool install 'witnessbox>=0.10.0'`.)*
 
-## Проектный конфиг (`.acceptbox.toml`, L23, L25, L26)
+### 2. Configure the project once (`.acceptbox.toml` on `main`)
 
-Чтобы не повторять параметры проекта при каждом запуске, добавьте в корень репозитория `.acceptbox.toml`:
+Commit `.acceptbox.toml` to your base branch so nobody has to repeat flags on every run:
 
 ```toml
 format = 1
-mode = "command"               # опционально: "command" | "witnessbox" (по умолчанию "command")
-timeout = 600                  # опционально: положительное число секунд
-protect = ["pyproject.toml"]   # опционально: объединяется с --protect из CLI
-env = ["PYTHONPATH=src"]       # опционально: KEY или KEY=VAL (BASE, EBT_* и git local-env-vars запрещены)
+mode = "command"
+protect = ["pyproject.toml"]
 
 [command]
 tests = ["tests/"]
 argv = ["python3", "-m", "unittest", "discover", "-s", "tests"]
-
-[witnessbox]
-ebt_ref = "main"
-# ebt_repo указывать не нужно, если ebt/ живёт в том же репозитории (по умолчанию --repo);
-# если указан — только URL или абсолютный путь (L27)
 ```
 
-**Правила доверия (fail-closed):**
-- `.acceptbox.toml` читается строго из объектов Git базового коммита `base` (в `calibrate` — только при переданном `--base`), а не из рабочего дерева или веток `repro`/`head`;
-- `.acceptbox.toml` автоматически защищается от изменений, удаления и переименования в `base..repro` и `base..head` (как `--protect`);
-- **граница доверия `--base` (L26):** конфигу можно доверять ровно настолько, насколько можно доверять `--base`. AcceptBox не проверяет принадлежность `--base` основной ветке — `--base` должна задавать принимающая сторона (человек, CI или внешний оркестратор, например через `git merge-base main HEAD`), а не проверяемый агент;
-- все присутствующие секции валидируются строго: неизвестные ключи, пер-задачные поля (`inv`, `ebt_sha`, `approved_tree`, `base`, `repro`, `head`, `repo`, `out`), относительный локальный путь `[witnessbox].ebt_repo`, симлинки и ошибки TOML завершаются с `ERROR` (`config-invalid`, код `2`); блок `inputs.config` такого отчёта содержит `commit` и `sha256` отклонённого файла;
-- `env` допускает обычные переменные (включая `GIT_SSH_COMMAND` или `GIT_AUTHOR_NAME`), но запрещает `BASE`, любые `EBT_*` и переменные git-изоляции из `git rev-parse --local-env-vars`;
-- `protect` из конфига и CLI суммируются (CLI не может ослабить защиту из `base`), `env` сливается с приоритетом CLI по ключу (`--env KEY` без значения при отсутствии `KEY` в окружении снимает значение из конфига), остальные параметры переопределяются явными флагами CLI.
+AcceptBox reads `.acceptbox.toml` strictly from Git objects of the `base` commit and automatically protects it from changes in `base..repro` and `base..head`.
 
-## Фиксация дерева проверок (`pin`)
+### 3. Fix a bug as `base → repro → head`
 
 ```sh
-acceptbox pin --ebt-repo /path/to/project --ebt-sha "$(git -C /path/to/project rev-parse HEAD)"
+# Starting from a commit on main (base):
+# 1) Add a failing reproduction test in tests/ and commit it:
+git commit -m "test: reproduce bug #123"
+REPRO=$(git rev-parse HEAD)
+
+# 2) Fix the bug in application code (without touching the repro test) and commit:
+git commit -m "fix: handle empty input (#123)"
 ```
 
-Читает дерево `ebt/` напрямую из объектов Git (без незакоммиченных правок) и печатает 64-символьный SHA-256. Флаг `--ebt-repo` в `pin` обязателен.
-
-## Приёмка коммитов (`accept`)
-
-Эргономичные значения по умолчанию (L22):
-- `--mode` по умолчанию берётся из `.acceptbox.toml` или равен `command`;
-- `--repo` по умолчанию `.`;
-- `--head` по умолчанию `HEAD` из `--repo`; резолв в полный SHA выполняется сразу после проверки `git`, его сбой даёт `gate-error` с отчётом (явно переданный `--head` по-прежнему принимается только как полный 40/64-hex SHA). **Важно:** незакоммиченные правки рабочего дерева не проверяются, а если `--repo` указан как URL, через `git ls-remote` берётся удалённый `HEAD` (обычно ветка по умолчанию, а не ветка с фиксом — для URL передавайте `--head` явно);
-- `--ebt-repo` в `witnessbox` по умолчанию берётся из `.acceptbox.toml` или равен `--repo`. Если это локальный checkout, проверка «`--ebt-sha` — предок `--ebt-ref`» идёт по локальной ветке, которую может сдвинуть любой, кто пишет в этот checkout: опорой доверия остаётся только `--approved-tree`. Для полной проверки L10 передайте в `--ebt-repo` URL основного репозитория (L27);
-- `--out` по умолчанию атомарно создаётся как новый пустой каталог в системном `TMPDIR`, а путь к `accept.json` выводится в итоговое сообщение.
-
-### Режим `command`
-
-Минимальный запуск (при наличии `.acceptbox.toml` в `base`, из корня репозитория):
-
-```sh
-acceptbox accept --base "$(git merge-base main HEAD)" --repro <40-hex-sha>
-```
-
-Полный запуск с явными флагами (без `.acceptbox.toml`):
+### 4. Run acceptance
 
 ```sh
 acceptbox accept \
-  --mode command \
-  --repo /path/to/project \
-  --base <40-hex-sha> \
-  --repro <40-hex-sha> \
-  --head <40-hex-sha> \
-  --tests tests/ \
-  [--protect path/to/protect ...] \
-  [--timeout 600] \
-  [--env KEY[=VAL] ...] \
-  [--out /tmp/accept-run] \
-  -- python3 -m unittest discover -s tests
+  --base-ref main \
+  --base "$(git merge-base main HEAD)" \
+  --repro "$REPRO"
 ```
 
-Команда после `--` (или `[command].argv` в `.acceptbox.toml`) запускается без shell (`shell=False`) с очищенным окружением. Автоопределение тестовой команды не выполняется. Код `0` трактуется как `green`, код `1` — как `red`, любой другой код (`>= 2`), сигнал или таймаут — как `gate-error` (код `2`).
+AcceptBox prints the verdict and the path to `accept.json` (created atomically in a new directory under `TMPDIR`, or in `--out <empty-dir>`):
 
-### Режим `witnessbox`
+- Exit code `0` — **`ACCEPTED`** (all checks passed).
+- Exit code `1` — **`REJECTED`** (acceptance rule failed: e.g., `base-not-on-ref`, `repro-outside-tests`, `repro-tests-modified`, `protected-paths-changed`, `repro-green`, `head-not-green`).
+- Exit code `2` — **`ERROR`** (CLI/config/environment/git error or test runner failure with exit code `>= 2`).
 
-```sh
-acceptbox accept \
-  --mode witnessbox \
-  --base <40-hex-sha> \
-  --repro <40-hex-sha> \
-  --inv INV-1,INV-2 \
-  --ebt-ref main \
-  --ebt-sha <40-hex-sha> \
-  --approved-tree <64-hex-sha256> \
-  [--repo /path/to/project] \
-  [--head <40-hex-sha>] \
-  [--ebt-repo /path/to/ebt-repo] \
-  [--protect path/to/protect ...] \
-  [--timeout 600] \
-  [--env KEY[=VAL] ...] \
-  [--out /tmp/accept-ebt-run]
-```
+> **Using an AI coding agent?** Point it to the [agent instructions](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) to set up `.acceptbox.toml`, test wrappers, and ongoing project agent rules automatically — with explicit human-approval stop points.
 
-## Калибровка чувствительности (`calibrate`)
+## When to use AcceptBox (and when not to)
 
-Режим `command`:
+- **Bugfixes** (`command` or `witnessbox` mode): the primary use case for `base → repro → head`.
+- **Human-approved invariants** (`witnessbox` mode): works for both bugfixes and features when a human approves `ebt/spec.toml` before implementation.
+- **New features without an approved spec**: a failing `repro` test written by the same agent that writes the implementation does not give a strong guarantee — the agent can fit the test and the code to each other. Use a human-approved specification (`witnessbox` mode) and/or independent review.
+- **Refactorings** (`base` green → `head` green without `repro`): orthogonal to `--mode` and out of scope for the current `base → repro → head` workflow.
 
-```sh
-acceptbox calibrate \
-  --green <sha> \
-  --red <sha> \
-  [--repo /path/to/project] \
-  [--base <base_sha>] \
-  [--timeout 600] \
-  [--env KEY[=VAL] ...] \
-  [--out /tmp/calibrate-run] \
-  -- python3 -m unittest discover -s tests
-```
+## Guarantees and limits
 
-Режим `witnessbox`:
+AcceptBox enforces commit structure, file immutability, and clean-worktree execution, but it is **not an OS sandbox**: test commands run as the invoking OS user.
 
-```sh
-acceptbox calibrate \
-  --mode witnessbox \
-  --green <sha> \
-  --red <sha> \
-  --inv INV-1 \
-  --ebt-ref main \
-  --ebt-sha <40-hex-sha> \
-  --approved-tree <64-hex-sha256> \
-  [--repo /path/to/project] \
-  [--ebt-repo /path/to/ebt-repo] \
-  [--base <base_sha>] \
-  [--timeout 600] \
-  [--env KEY[=VAL] ...] \
-  [--out /tmp/calibrate-ebt-run]
-```
+- **`.acceptbox.toml` trust boundary:** the config is read only from `base` and auto-protected, so it is as trustworthy as `--base`. Pass `--base-ref main` (CLI-only) so AcceptBox checks that `--base` is an ancestor of `main` from `origin` *before* reading the config. Without `--base-ref`, `--base` must be supplied by the acceptor (human, CI, or external orchestrator), not by the agent under test.
+- **Local `.git/config` trust boundary:** for a local `--repo` / `--ebt-repo`, AcceptBox fetches `--base-ref` and `--ebt-ref` from remote `origin` (falling back to the local branch with `ref_source_kind: "local"` if no `origin` exists). An agent with write access to `.git/config` could repoint or remove `origin`. Always inspect `ref_source` and `ref_source_kind` in `accept.json`; for full assurance, run acceptance outside the agent's reach (CI) or pass `--repo` / `--ebt-repo` as repository URLs.
+- **Test quality in `command` mode:** `command` mode proves that `repro` only touched `--tests`, failed with exit code `1`, and was not altered by `head`, which then passed with exit code `0`. Reviewing that the test actually tests the right thing remains a human check — or use `witnessbox` mode for independent invariant checking.
+- **Clean-worktree setup:** every commit runs in a fresh detached worktree with a sanitized environment. If your stack needs dependency installation or compilation, wrap it in a script that exits with code `>= 2` on setup failure and `1` *only* on test failure (see [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md)).
 
-Калибровка проверяет набор `--green` / `--red` коммитов и записывает `<out>/calibrate.json` (`accept.json` не создаётся). Проверки `ancestry`, `--protect` и диффа `base..repro` / `repro..head` в калибровке **не применяются**. Если передан `--base`, настройки могут подгружаться из `.acceptbox.toml` этого коммита (и в `witnessbox` передаётся `BASE`).
+## Documents
 
-## Коды выхода и отчёты
+- [Quick start & onboarding](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) — step-by-step walkthrough for `command` mode, `witnessbox` mode, and `calibrate`.
+- [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
+- [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.
+- [CLI & configuration reference](https://github.com/kaufd/acceptbox/blob/main/docs/usage.md) — complete reference for `accept`, `calibrate`, `pin`, `--installation`, `.acceptbox.toml`, exit codes, reason codes, and report rules.
+- [Decisions](https://github.com/kaufd/acceptbox/blob/main/docs/decisions.md) — append-only architectural decision log (`L8`–`L29`).
 
-- `0` — `ACCEPTED` (для `accept`) / `CALIBRATED` (для `calibrate`);
-- `1` — `REJECTED` / `FAILED` (отказ по правилам приёмки или калибровки);
-- `2` — `ERROR` (ошибка аргументов CLI, непустой `--out`, некорректный `.acceptbox.toml` `config-invalid`, сбой `git`, отсутствующий/несовместимый `witnessbox`, нарушение схемы отчёта, ошибка прогона `gate-error`).
+Documentation is available in English and Russian; every page links to its translation.
 
-**Правило записи отчёта при коде `2` (L26):**
-- `accept.json` / `calibrate.json` **не создаётся** при ошибках синтаксиса CLI, при `out-not-empty`, а также при нехватке обязательных аргументов (`--tests`, команды после `--`, `--inv`, `--ebt-ref`, `--ebt-sha`, `--approved-tree`) или смешивании флагов режимов, обнаруженных после чтения `base:.acceptbox.toml`; если пустой каталог `--out` был создан текущим запуском, он удаляется;
-- во всех остальных случаях кода `2` после захвата `--out` (включая `config-invalid`, `witnessbox-missing`, `witnessbox-incompatible`, `gate-error`) отчёт записывается атомарно, а путь к нему печатается в `stderr`.
+## License
 
-Подробнее о подключении проекта см. [docs/onboarding.md](docs/onboarding.md) и журнал решений [docs/decisions.md](docs/decisions.md).
-
-## Разработка и сборка
-
-```sh
-python3 -m unittest discover -s tests
-uv build
-```
+[MIT](https://github.com/kaufd/acceptbox/blob/main/LICENSE).

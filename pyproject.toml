@@ -4,12 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "acceptbox"
-version = "0.1.0"
-description = "Независимая приёмка коммитов base → repro → head в режимах command и WitnessBox"
+version = "0.2.0"
+description = "Independent bugfix acceptance gate for Git commit chains (base -> repro -> head)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
+keywords = ["testing", "acceptance", "git", "bugfix", "coding-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -21,6 +22,12 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 
+[project.urls]
+Homepage = "https://github.com/kaufd/acceptbox"
+Documentation = "https://github.com/kaufd/acceptbox/blob/main/docs/usage.md"
+Source = "https://github.com/kaufd/acceptbox"
+Issues = "https://github.com/kaufd/acceptbox/issues"
+
 [project.scripts]
 acceptbox = "acceptbox.cli:main"
 
@@ -28,4 +35,4 @@ acceptbox = "acceptbox.cli:main"
 packages = ["src/acceptbox"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/acceptbox", "/README.md", "/LICENSE", "/pyproject.toml"]
+include = ["/src/acceptbox", "/README.md", "/README.ru.md", "/LICENSE", "/pyproject.toml"]
