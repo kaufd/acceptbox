@@ -549,6 +549,70 @@ class TestLocalAutoResolve(unittest.TestCase):
             data2 = json.loads((out2 / "accept.json").read_text(encoding="utf-8"))
             self.assertEqual(data2["reason_code"], "repro-red-wrong-reason")
 
+    def test_external_config_file_in_accept_and_calibrate_and_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            repo = tmp / "clean-repo"
+            _init_repo(repo)
+            (repo / "app.py").write_text("def f(x):\n    return x * 2\n", encoding="utf-8")
+            (repo / "tests").mkdir()
+            (repo / "tests" / "test_app.py").write_text(
+                "import unittest\nfrom app import f\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_f(self): self.assertEqual(f(3), 6)\n",
+                encoding="utf-8",
+            )
+            # Notice: NO .acceptbox.toml committed inside clean-repo!
+            base = _commit(repo, "base")
+            _git(repo, "checkout", "-q", "-b", "refactor/ext")
+            (repo / "app.py").write_text("def f(x):\n    return x + x\n", encoding="utf-8")
+            head = _commit(repo, "refactor")
+
+            ext_cfg = tmp / "external.toml"
+            ext_cfg.write_text(
+                'format = 1\nmode = "command"\n\n[command]\ntests = ["tests/"]\n'
+                f'argv = [{json.dumps(PYTHON)}, "-m", "unittest", "discover", "-s", "tests"]\n',
+                encoding="utf-8",
+            )
+            out1 = tmp / "out1"
+            res1 = _run_cli([
+                "accept", "--config", str(ext_cfg), "--policy", "refactor",
+                "--base-ref", "main", "--out", str(out1),
+            ], cwd=repo)
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            data1 = json.loads((out1 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data1["result"], "ACCEPTED")
+            self.assertIsNone(data1["inputs"]["config"]["commit"])
+            self.assertTrue(data1["inputs"]["config"]["path"].endswith("external.toml"))
+
+            # Calibrate with --config works without --base
+            out2 = tmp / "out2"
+            res2 = _run_cli([
+                "calibrate", "--config", str(ext_cfg), "--repo", str(repo),
+                "--green", head, "--out", str(out2),
+            ])
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            data2 = json.loads((out2 / "calibrate.json").read_text(encoding="utf-8"))
+            self.assertEqual(data2["result"], "CALIBRATED")
+
+            # Symlink --config is rejected with config-invalid (exit 2)
+            link_cfg = tmp / "link.toml"
+            link_cfg.symlink_to(ext_cfg)
+            out3 = tmp / "out3"
+            res3 = _run_cli([
+                "accept", "--config", str(link_cfg), "--policy", "refactor",
+                "--base-ref", "main", "--out", str(out3),
+            ], cwd=repo)
+            self.assertEqual(res3.returncode, 2)
+            data3 = json.loads((out3 / "accept.json").read_text(encoding="utf-8"))
+            self.assertEqual(data3["reason_code"], "config-invalid")
+
+    def test_example_demo_runs_end_to_end(self) -> None:
+        demo = Path(__file__).resolve().parents[1] / "example" / "run_demo.py"
+        res = subprocess.run([PYTHON, str(demo)], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("All 3 demo scenarios passed.", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

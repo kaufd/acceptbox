@@ -44,7 +44,7 @@ tests = ["tests/"]
 argv = ["python3", "-m", "unittest", "discover", "-s", "tests"]
 ```
 
-AcceptBox reads `.acceptbox.toml` strictly from Git objects of the `base` commit and automatically protects it from changes in `base..repro` and `base..head`.
+AcceptBox reads `.acceptbox.toml` strictly from Git objects of the `base` commit and automatically protects it from changes in `base..repro` and `base..head`. Prefer not to commit anything to the target repository? Keep the file outside the repository (see [example/acceptbox.toml](https://github.com/kaufd/acceptbox/blob/main/example/acceptbox.toml)) and pass `--config /path/to/acceptbox.toml`.
 
 ### 3. Fix a bug as `base → repro → head`
 
@@ -92,6 +92,7 @@ AcceptBox enforces commit structure, file immutability, and clean-worktree execu
 
 ## Documents
 
+- [Example (`example/`)](https://github.com/kaufd/acceptbox/blob/main/example/README.md) — runnable demo with an external `--config` file (`example/acceptbox.toml`) and zero files committed to the target repository.
 - [Quick start & onboarding](https://github.com/kaufd/acceptbox/blob/main/docs/onboarding.md) — step-by-step walkthrough for `command` mode, `witnessbox` mode, and `calibrate`.
 - [Project setup & templates](https://github.com/kaufd/acceptbox/blob/main/docs/setup.md) — stack-by-stack `.acceptbox.toml` recipes, the clean-worktree wrapper script contract, and a ready-to-copy ongoing `AGENTS.md` rules template for connected projects.
 - [Instructions for a coding agent](https://github.com/kaufd/acceptbox/blob/main/docs/agent.md) — full playbook for AI agents: connecting AcceptBox to a repository (with human stop points) and working on bugfix branches afterward.

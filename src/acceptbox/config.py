@@ -34,21 +34,23 @@ _VALID_MODES = frozenset({"command", "witnessbox"})
 
 
 class ConfigError(ValueError):
-    """Некорректный .acceptbox.toml в базовом коммите → config-invalid (код 2).
+    """Некорректный конфиг (.acceptbox.toml или --config) → config-invalid (код 2).
 
-    ``commit`` и ``sha256`` заполняет load_config_from_commit для отчёта.
+    ``commit``, ``path`` и ``sha256`` заполняются загрузчиком для отчёта.
     """
 
     commit: str | None = None
+    path: str | None = None
     sha256: str | None = None
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    """Разобранный и провалидированный .acceptbox.toml из коммита base."""
+    """Разобранный и провалидированный конфиг из коммита base или внешнего --config."""
 
-    source_commit: str
+    source_commit: str | None
     sha256: str
+    source_path: str = CONFIG_FILENAME
     mode: str | None = None
     timeout: float | None = None
     protect: tuple[str, ...] = ()
@@ -74,7 +76,8 @@ def _require_str_list(value: object, *, label: str, allow_empty: bool = True) ->
     return value
 
 
-def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
+def parse_config(raw_bytes: bytes, *, commit_sha: str | None,
+                 source_path: str = CONFIG_FILENAME) -> ProjectConfig:
     """Разобрать и провалидировать содержимое .acceptbox.toml (fail-closed)."""
     sha256 = hashlib.sha256(raw_bytes).hexdigest()
     try:
@@ -199,6 +202,7 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
     return ProjectConfig(
         source_commit=commit_sha,
         sha256=sha256,
+        source_path=source_path,
         mode=mode,
         timeout=timeout,
         protect=tuple(protect),
@@ -208,6 +212,39 @@ def parse_config(raw_bytes: bytes, *, commit_sha: str) -> ProjectConfig:
         witnessbox_ebt_repo=wb_ebt_repo,
         witnessbox_ebt_ref=wb_ebt_ref,
     )
+
+
+def load_config_from_file(config_path: Path) -> ProjectConfig:
+    """Прочитать внешний конфиг ``--config <path>`` с диска (fail-closed, L30).
+
+    Отклоняет отсутствующий путь, симлинки, каталоги и ошибки схемы → ConfigError.
+    """
+    resolved = Path(os.path.abspath(os.path.expanduser(str(config_path))))
+    path_str = str(resolved)
+    if resolved.is_symlink():
+        error = ConfigError(f"--config {path_str}: симлинк не допускается")
+        error.path = path_str
+        raise error
+    if not resolved.exists():
+        error = ConfigError(f"--config {path_str}: файл не найден")
+        error.path = path_str
+        raise error
+    if not resolved.is_file():
+        error = ConfigError(f"--config {path_str}: должен быть обычным файлом")
+        error.path = path_str
+        raise error
+    try:
+        raw = resolved.read_bytes()
+    except OSError as io_error:
+        error = ConfigError(f"--config {path_str}: не удалось прочитать файл: {io_error}")
+        error.path = path_str
+        raise error from io_error
+    try:
+        return parse_config(raw, commit_sha=None, source_path=path_str)
+    except ConfigError as error:
+        error.path = path_str
+        error.sha256 = hashlib.sha256(raw).hexdigest()
+        raise
 
 
 def load_config_from_commit(repo: Path, env: dict[str, str],

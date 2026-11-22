@@ -1,0 +1,22 @@
+# Example AcceptBox project configuration.
+#
+# Use externally without committing anything to the target repository:
+#   acceptbox accept --config example/acceptbox.toml --base-ref main
+#
+# Or copy to the root of a repository as `.acceptbox.toml` on the base branch.
+
+format = 1
+mode = "command"             # "command" | "witnessbox" (default: "command")
+timeout = 300                # positive finite number of seconds (default: 600)
+protect = ["pyproject.toml"] # merged (union) with CLI --protect
+env = ["PYTHONPATH=src"]     # KEY or KEY=VAL (BASE, EBT_*, git local-env-vars forbidden)
+
+[command]
+tests = ["tests/"]
+argv = ["python3", "-m", "unittest", "discover", "-s", "tests"]
+
+[witnessbox]
+# Set ebt_repo to an absolute path or URL if ebt/ lives outside the target repository.
+# When omitted, defaults to --repo.
+# ebt_repo = "/abs/path/to/external-ebt-repo"
+ebt_ref = "main"

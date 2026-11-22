@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory, mkdtemp
 from . import __version__
 from .command import run_commit as run_command_commit
 from .config import (CONFIG_FILENAME, ConfigError, ProjectConfig,
-                     load_config_from_commit)
+                     load_config_from_commit, load_config_from_file)
 from .git import (GitError, add_worktree, base_env, changed_paths, clone_no_checkout,
                   commit_message, ensure_commit, fetch_ref, is_ancestor, merge_base,
                   probe_git, resolve_repo_head, rev_list_first_parent, rev_parse_tree,
@@ -88,17 +88,31 @@ def _config_summary(project_config: ProjectConfig | None) -> dict | None:
     if project_config is None:
         return None
     return {
-        "path": CONFIG_FILENAME,
+        "path": project_config.source_path,
         "commit": project_config.source_commit,
         "sha256": project_config.sha256,
     }
 
 
 def _config_error_summary(cfg_error: ConfigError) -> dict | None:
-    """Отпечаток отклонённого .acceptbox.toml для отчёта config-invalid."""
-    if cfg_error.commit is None:
+    """Отпечаток отклонённого конфига для отчёта config-invalid."""
+    if cfg_error.commit is None and cfg_error.path is None:
         return None
-    return {"path": CONFIG_FILENAME, "commit": cfg_error.commit, "sha256": cfg_error.sha256}
+    return {
+        "path": cfg_error.path or CONFIG_FILENAME,
+        "commit": cfg_error.commit,
+        "sha256": cfg_error.sha256,
+    }
+
+
+def _validate_config_path(value: str | None) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise InputError("--config: укажите путь к файлу конфигурации")
+    if "\x00" in value or any(ord(char) < 32 for char in value):
+        raise InputError("--config: недопустимые управляющие символы")
+    return Path(os.path.abspath(os.path.expanduser(value)))
 
 
 def _remove_empty_dir(path: Path) -> None:
@@ -239,6 +253,7 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
         policy = args.policy
         strict_refs = bool(args.strict_refs)
         pin_from_ref = bool(args.pin_from_ref)
+        config_path = _validate_config_path(args.config)
         repo = validate_repo_source(args.repo, flag="--repo")
         base_ref = (validate_ref(args.base_ref, flag="--base-ref")
                     if args.base_ref is not None else None)
@@ -474,7 +489,10 @@ def _cmd_accept(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             runs["base"]["commit"] = base
                             checks["base_ref"]["status"] = "ok"
                         try:
-                            project_config = load_config_from_commit(clone, git_env, base)
+                            if config_path is not None:
+                                project_config = load_config_from_file(config_path)
+                            else:
+                                project_config = load_config_from_commit(clone, git_env, base)
                         except ConfigError as cfg_error:
                             config_summary = _config_error_summary(cfg_error)
                             return finish(error_verdict("config-invalid", str(cfg_error)))
@@ -802,6 +820,7 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
 
     # Стадия 1: валидация CLI (код 2).
     try:
+        config_path = _validate_config_path(args.config)
         repo = validate_repo_source(args.repo, flag="--repo")
         auto_out = args.out is None
         out_path: Path | None = None
@@ -835,8 +854,8 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
         else:
             _reject_cli_cross_mode_mixing(args, cmd_argv)
 
-        # Без --base конфиг .acceptbox.toml не читается (L23) — проверяем полноту CLI сразу.
-        if base is None:
+        # Без --base и --config конфиг не читается (L23) — проверяем полноту CLI сразу.
+        if base is None and config_path is None:
             resolved_mode = args.mode or "command"
             _reject_mode_mixing(args, resolved_mode, cmd_argv)
             if resolved_mode == "command":
@@ -940,8 +959,13 @@ def _cmd_calibrate(args: argparse.Namespace, cmd_argv: list[str] | None) -> int:
                             if not ensure_commit(clone, git_env, repo, base):
                                 return finish("ERROR", 2, "gate-error",
                                               f"коммит --base {base} отсутствует в --repo")
+                        if config_path is not None or base is not None:
                             try:
-                                project_config = load_config_from_commit(clone, git_env, base)
+                                if config_path is not None:
+                                    project_config = load_config_from_file(config_path)
+                                else:
+                                    assert base is not None
+                                    project_config = load_config_from_commit(clone, git_env, base)
                             except ConfigError as cfg_error:
                                 config_summary = _config_error_summary(cfg_error)
                                 return finish("ERROR", 2, "config-invalid", str(cfg_error))
@@ -1154,6 +1178,9 @@ def _add_accept_flags(subparser: argparse.ArgumentParser) -> None:
         help="в режиме witnessbox взять --ebt-sha с вершины доверенной --ebt-ref и "
              "вычислить --approved-tree автоматически (только CLI, L30)")
     subparser.add_argument(
+        "--config", default=None,
+        help="путь к внешнему файлу конфигурации TOML вместо base:.acceptbox.toml (только CLI, L30)")
+    subparser.add_argument(
         "--head", default=None,
         help="полный SHA головного коммита (по умолчанию HEAD из --repo)")
     subparser.add_argument(
@@ -1197,6 +1224,9 @@ def _add_calibrate_flags(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--base",
         help="полный SHA базового коммита (BASE в witnessbox и источник .acceptbox.toml)")
+    subparser.add_argument(
+        "--config", default=None,
+        help="путь к внешнему файлу конфигурации TOML вместо base:.acceptbox.toml (только CLI, L30)")
     subparser.add_argument(
         "--timeout", default=None,
         help="таймаут одного прогона в секундах (по умолчанию из .acceptbox.toml или 600)")

@@ -44,7 +44,7 @@ tests = ["tests/"]
 argv = ["python3", "-m", "unittest", "discover", "-s", "tests"]
 ```
 
-AcceptBox читает `.acceptbox.toml` строго из объектов Git коммита `base` и автоматически защищает его от изменений в `base..repro` и `base..head`.
+AcceptBox читает `.acceptbox.toml` строго из объектов Git коммита `base` и автоматически защищает его от изменений в `base..repro` и `base..head`. Не хотите коммитить служебные файлы в целевой репозиторий? Держите конфиг снаружи (см. [example/acceptbox.toml](example/acceptbox.toml)) и передавайте `--config /path/to/acceptbox.toml`.
 
 ### 3. Сделайте багфикс в виде `base → repro → head`
 
@@ -92,6 +92,7 @@ AcceptBox проверяет структуру коммитов, неизмен
 
 ## Документы
 
+- [Пример (`example/`)](example/README.ru.md) — запускаемая демонстрация с внешним `--config` (`example/acceptbox.toml`) без единого служебного файла в целевом репозитории.
 - [Быстрый старт и подключение](docs/onboarding.ru.md) — пошаговое руководство по режимам `command`, `witnessbox` и калибровке `calibrate`.
 - [Настройка проекта и шаблоны](docs/setup.ru.md) — рецепты `.acceptbox.toml` по стекам, контракт скрипта-обёртки для чистого worktree и готовый шаблон правил `AGENTS.md` для подключённого проекта.
 - [Инструкция для агента-кодировщика](docs/agent.ru.md) — руководство для ИИ-агентов: подключение AcceptBox к репозиторию (с точками остановки для человека) и дальнейшая работа над багфиксами.
